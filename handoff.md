@@ -22,7 +22,8 @@ against released `Net::WebSocket` 0.24, `Uniform::HTTP` 0.02, Linux::Event
 - A tiny reader/writer adapter satisfies `Net::WebSocket::Parser` and Endpoint
   without depending on `IO::Framed`.
 - Net::WebSocket client/server endpoints work over a real
-  `Linux::Event::IO::Sock::Stream` socketpair, including role-correct masking.
+  `Linux::Event::IO::Sock::Stream` socketpair, including endpoint-specific
+  masking.
 - Ping/pong and close control frames work through the adapter.
 - Linux::Event::HTTP server Upgrade transitions the same live connection into a
   WebSocket Stream subclass correctly.
@@ -33,6 +34,33 @@ against released `Net::WebSocket` 0.24, `Uniform::HTTP` 0.02, Linux::Event
 - The transitioned server can queue a WebSocket reply after the queued HTTP 101
   without violating output ordering.
 - Client-side in-place transition after a validated 101 is also proven.
+
+## Inheritance policy
+
+This distribution uses ordinary single inheritance only.
+
+There are no Perl roles, mixins, multiple inheritance, or method injection in
+the WebSocket connection design.
+
+The intended chains are exactly:
+
+```
+Linux::Event::WebSocket::Client::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+and separately:
+
+```
+Linux::Event::WebSocket::Server::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+Use `endpoint_type` for the client/server distinction. Avoid the term "role" in
+this project because it can imply a Perl role/mixin design that is explicitly
+not being used.
 
 ## Dependency decision
 
@@ -52,10 +80,11 @@ message behavior.
 
 ## Agreed architecture
 
-- Established connections inherit from `Linux::Event::IO::Sock::Stream`.
+- Established connections ultimately inherit from
+  `Linux::Event::IO::Sock::Stream` through the single-inheritance chain above.
 - Common established behavior belongs in
   `Linux::Event::WebSocket::Connection`.
-- Role-specific established classes are planned as
+- Endpoint-specific established classes are
   `Linux::Event::WebSocket::Client::Connection` and
   `Linux::Event::WebSocket::Server::Connection`.
 - High-level coordinators are planned as `Linux::Event::WebSocket::Client` and
