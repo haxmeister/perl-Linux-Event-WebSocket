@@ -28,7 +28,7 @@ use LEWS::Prototype::IO ();
     use v5.36;
     use parent 'LEWS::Prototype::Connection';
 
-    sub websocket_role ($class) { 'server' }
+    sub websocket_endpoint_type ($class) { 'server' }
 
     sub on_websocket_message ($self, $message) {
         $self->data->{server_message} = [
@@ -44,7 +44,7 @@ use LEWS::Prototype::IO ();
     use v5.36;
     use parent 'LEWS::Prototype::Connection';
 
-    sub websocket_role ($class) { 'client' }
+    sub websocket_endpoint_type ($class) { 'client' }
 
     sub on_websocket_message ($self, $message) {
         $self->data->{client_message} = [
