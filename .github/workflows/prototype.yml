@@ -8,22 +8,36 @@ on:
 jobs:
   prototype:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        perl: ['5.36', '5.44.0']
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Perl dependencies
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: ${{ matrix.perl }}
+
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cpanminus build-essential libssl-dev
-          sudo cpanm --notest Net::WebSocket
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Verify Net::WebSocket normal installation
+        run: cpanm Net::WebSocket
+
+      - name: Install project dependencies
+        run: |
           git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          sudo cpanm --notest /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
           git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          sudo cpanm --notest /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
           git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          sudo cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
 
       - name: Run prototype tests
         run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t prototype/t/03-linux-event-stream.t prototype/t/04-http-upgrade.t
