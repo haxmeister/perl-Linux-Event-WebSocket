@@ -42,6 +42,8 @@ jobs:
 
       - name: Install Linux::Event dependencies
         run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
           git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
           cpanm --notest /tmp/perl-linux-event
           git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
