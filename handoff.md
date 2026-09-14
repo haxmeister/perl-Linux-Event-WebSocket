@@ -8,12 +8,17 @@ Default branch: `main`
 
 ## Current status
 
-The architecture prototype is successful. Public API names are now being promoted
-into the real distribution, but no CPAN release has been made yet.
+The architecture prototype is successful, but the WebSocket protocol-engine
+dependency is not yet selected for production. No CPAN release has been made.
 
 GitHub Actions run 34802469241 passed all four prototype files: 43 tests total
 against released `Net::WebSocket` 0.24, `Uniform::HTTP` 0.02, Linux::Event
-0.114, and Linux::Event::HTTP 0.001.
+0.114, and Linux::Event::HTTP 0.001. That run installed Net::WebSocket with
+`--notest`, so it proves API compatibility but not normal installability.
+
+The primary development machine reports that `Net::WebSocket` fails its test
+suite during a normal installation. The dependency is therefore blocked pending
+investigation and must not be force-installed as part of the production design.
 
 ## Proven boundaries
 
@@ -62,13 +67,13 @@ Use `endpoint_type` for the client/server distinction. Avoid the term "role" in
 this project because it can imply a Perl role/mixin design that is explicitly
 not being used.
 
-## Dependency decision
+## Dependency decisions
 
-`Linux::Event::HTTP` is now planned as a normal runtime dependency for the
-high-level WebSocket client/server API. This is intentional: the HTTP
-handshake is security-sensitive protocol work, and Linux::Event::HTTP already
-provides the exact client/server Upgrade validation, TLS integration, output
-ordering, and same-read handoff needed here.
+`Linux::Event::HTTP` is planned as a normal runtime dependency for the
+high-level WebSocket client/server API. The HTTP handshake is security-sensitive
+protocol work, and Linux::Event::HTTP already provides the exact client/server
+Upgrade validation, TLS integration, output ordering, and same-read handoff
+needed here.
 
 Do not add a second miniature HTTP parser to Linux::Event::WebSocket merely to
 avoid that dependency.
@@ -77,6 +82,20 @@ avoid that dependency.
 compatibility, but it is not currently needed as a direct runtime dependency by
 this distribution. Linux::Event::HTTP message objects expose the same relevant
 message behavior.
+
+No external WebSocket protocol engine is currently approved as a production
+runtime dependency.
+
+`Net::WebSocket` remains a technically strong candidate because its public API
+fit is excellent, but version 0.24 currently fails a normal test-driven install
+on the primary development machine. Do not use `--notest` as a production
+workaround and do not declare Net::WebSocket in `PREREQ_PM` until this is
+resolved.
+
+CI has been changed to install `Net::WebSocket` normally, with tests enabled, on
+Perl 5.36 and Perl 5.44.0. The result of that matrix should be used to help
+distinguish a modern-Perl problem from a machine-specific or dependency-specific
+problem.
 
 ## Agreed architecture
 
@@ -89,12 +108,11 @@ message behavior.
   `Linux::Event::WebSocket::Server::Connection`.
 - High-level coordinators are planned as `Linux::Event::WebSocket::Client` and
   `Linux::Event::WebSocket::Server`.
-- `Net::WebSocket` owns RFC 6455 handshake/frame/message/control semantics.
 - `Linux::Event::HTTP` owns the opening HTTP/1.1 Upgrade exchange.
 - Linux::Event owns transport, TLS, buffering, backpressure, lifecycle, and
   `transition_to()`.
-- `IO::Framed` is not required.
-- Net::WebSocket private internals remain off limits.
+- The WebSocket engine must remain behind a narrow internal boundary so it can be
+  replaced without changing the public API.
 
 ## Transition-state rule
 
@@ -115,11 +133,11 @@ callback; that is too late for same-read post-101 data.
 
 Do not add a WebSocket framer to Linux::Event core.
 
-The first production implementation remains Perl at the WebSocket layer. If
-benchmarks later justify native parsing/masking, WebSocket-specific XS belongs
-in this distribution. Core should change only for a reusable facility useful to
-multiple protocol distributions, such as a generic external incremental native
-byte-consumer boundary.
+The first production implementation should remain Perl at the WebSocket layer.
+If benchmarks later justify native parsing/masking, WebSocket-specific XS
+belongs in this distribution. Core should change only for a reusable facility
+useful to multiple protocol distributions, such as a generic external
+incremental native byte-consumer boundary.
 
 ## Current prototype files
 
@@ -136,13 +154,15 @@ These are evidence, not the final public namespace.
 
 ## Next implementation work
 
-1. Promote the adapter and established connection into the real namespace.
-2. Implement high-level Server using Linux::Event::HTTP::Server Upgrade.
-3. Implement Client using Linux::Event::HTTP::Client::Connection with state
+1. Diagnose the normal `Net::WebSocket` installation failure across Perl 5.36
+   and 5.44 and compare it with the primary development machine failure.
+2. Decide whether to patch/contribute upstream, select another protocol engine,
+   or implement the small protocol layer locally.
+3. Only after that decision, promote the established connection into the real
+   namespace.
+4. Implement high-level Server using Linux::Event::HTTP::Server Upgrade.
+5. Implement Client using Linux::Event::HTTP::Client::Connection with state
    attached before handoff.
-4. Expose a callback-first API without leaking Net::WebSocket Message objects.
-5. Define graceful WebSocket close behavior separately from hard transport
-   close.
 6. Add plain ws:// integration tests, then wss:// tests.
 7. Only after correctness/API stabilization, benchmark raw Stream versus
    WebSocket traffic across small through large payloads in both directions.
