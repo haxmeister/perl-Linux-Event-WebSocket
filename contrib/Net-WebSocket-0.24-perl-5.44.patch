@@ -1,0 +1,34 @@
+From: Joshua S. Day <haxmeister@hotmail.com>
+Subject: [PATCH] Fix qw backslash warning on Perl 5.44
+
+Perl 5.44 warns when a bare backslash in a qw() list escapes the
+following whitespace. t/Net-WebSocket-HTTP.t uses Test::FailWarnings,
+so the warning adds a failing test and prevents a normal installation.
+
+Keep the backslash test case, but spell that value explicitly outside
+qw().
+
+---
+ t/Net-WebSocket-HTTP.t | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/t/Net-WebSocket-HTTP.t b/t/Net-WebSocket-HTTP.t
+index f7a9dfb..0000000 100644
+--- a/t/Net-WebSocket-HTTP.t
++++ b/t/Net-WebSocket-HTTP.t
+@@ -5,9 +5,12 @@ use Test::More;
+ use Test::FailWarnings;
+ use Test::Exception;
+ 
+-my @invalid = (
+-    ( map { "ha${_}he" } qw~ ( ) < > @ ; : \ " / [ ] ? = { } ~ ),
++my @invalid_char = (
++    qw~ ( ) < > @ ; : ~,
++    '\\',
++    qw~ " / [ ] ? = { } ~,
+ );
++
++my @invalid = map { "ha${_}he" } @invalid_char;
+ 
+ plan tests => 5 + @invalid;
+ 
