@@ -142,7 +142,10 @@ dies_like(
     sub {
         my $parser = parser_for(
             'server',
-            chr(0x82) . chr(0x80 | 127) . pack('NN', 0, 1024),
+            chr(0x82)
+                . chr(0x80 | 127)
+                . pack('NN', 0, 1024)
+                . ("\0" x 4),
             max_read => 256,
         );
         $parser->get_next_frame;
