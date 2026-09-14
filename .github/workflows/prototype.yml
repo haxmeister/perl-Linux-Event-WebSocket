@@ -1,0 +1,25 @@
+name: Prototype boundaries
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  prototype:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Perl dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpanminus
+          cpanm --notest Net::WebSocket
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+
+      - name: Run prototype tests
+        run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t
