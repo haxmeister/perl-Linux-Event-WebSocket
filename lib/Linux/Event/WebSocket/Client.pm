@@ -15,6 +15,8 @@ use Linux::Event::WebSocket::_State;
 
 our $VERSION = '0.001_001';
 
+my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
+
 sub _load_connection_class ($class) {
     croak 'new(): connection_class must be a package name'
         if !defined($class) || ref($class)
@@ -128,12 +130,12 @@ sub new ($class, %option) {
         'new(): close_timeout',
         exists($option{close_timeout}) ? delete($option{close_timeout}) : 5,
     );
-    my $max_message_size = exists($option{max_message_size})
-        ? _positive_integer(
-            'new(): max_message_size',
-            delete($option{max_message_size}),
-        )
-        : undef;
+    my $max_message_size = _positive_integer(
+        'new(): max_message_size',
+        exists($option{max_message_size})
+            ? delete($option{max_message_size})
+            : $DEFAULT_MAX_MESSAGE_SIZE,
+    );
     my $data = delete $option{data};
 
     croak 'new(): unknown option(s): ' . join(', ', sort keys %option)
@@ -166,7 +168,8 @@ sub _destination ($url) {
         if $scheme ne 'ws' && $scheme ne 'wss';
 
     my $http_url = "$url";
-    $http_url =~ s/\A[A-Za-z][A-Za-z0-9+.-]*:/$scheme eq 'wss' ? 'https:' : 'http:'/e;
+    my $http_scheme = $scheme eq 'wss' ? 'https' : 'http';
+    $http_url =~ s/\A[A-Za-z][A-Za-z0-9+.-]*:/$http_scheme:/;
     my $uri = URI->new($http_url);
 
     my $host = $uri->host;
@@ -397,6 +400,12 @@ calls made before the WebSocket handshake completes.
 
 Starts a graceful WebSocket close after the handshake. Before the handshake
 completes it closes the pending transport.
+
+=head1 LIMITS
+
+C<max_message_size> defaults to 16 MiB and may be set to another positive byte
+limit. The same bound also protects the frame reader from allocating an
+unreasonably large single frame.
 
 =head1 SUBPROTOCOLS AND HEADERS
 
