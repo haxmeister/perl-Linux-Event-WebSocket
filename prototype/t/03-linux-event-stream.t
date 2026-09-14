@@ -15,7 +15,7 @@ use LEWS::Prototype::Connection ();
     use v5.36;
     use parent 'LEWS::Prototype::Connection';
 
-    sub websocket_role ($class) { 'server' }
+    sub websocket_endpoint_type ($class) { 'server' }
 
     sub on_websocket_message ($self, $message) {
         push @{ $self->data->{server_messages} }, [
@@ -36,7 +36,7 @@ use LEWS::Prototype::Connection ();
     use v5.36;
     use parent 'LEWS::Prototype::Connection';
 
-    sub websocket_role ($class) { 'client' }
+    sub websocket_endpoint_type ($class) { 'client' }
 
     sub on_websocket_message ($self, $message) {
         push @{ $self->data->{client_messages} }, [
@@ -90,14 +90,14 @@ is_deeply(
 );
 
 is(
-    $client->websocket_role_name,
+    $client->websocket_endpoint_type_name,
     'client',
-    'client endpoint role is retained in connection state',
+    'client endpoint type is retained in connection state',
 );
 is(
-    $server->websocket_role_name,
+    $server->websocket_endpoint_type_name,
     'server',
-    'server endpoint role is retained in connection state',
+    'server endpoint type is retained in connection state',
 );
 
 $client->close if !$client->is_closed;
