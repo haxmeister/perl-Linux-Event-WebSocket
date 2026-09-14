@@ -27,8 +27,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Verify Net::WebSocket normal installation
-        run: cpanm Net::WebSocket
+      - name: Build and test patched Net::WebSocket
+        run: |
+          git clone --depth 1 https://github.com/FGasper/p5-Net-WebSocket.git /tmp/p5-Net-WebSocket
+          patch -d /tmp/p5-Net-WebSocket -p1 < contrib/Net-WebSocket-0.24-perl-5.44.patch
+          cd /tmp/p5-Net-WebSocket
+          cpanm --installdeps .
+          perl Makefile.PL
+          make
+          make test
+          make install
 
       - name: Install project dependencies
         run: |
