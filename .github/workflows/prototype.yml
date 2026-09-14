@@ -1,4 +1,4 @@
-name: Prototype boundaries
+name: WebSocket tests
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  prototype:
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,10 +27,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Build and test patched Net::WebSocket
+      - name: Build and test Net::WebSocket
         run: |
           git clone --depth 1 https://github.com/FGasper/p5-Net-WebSocket.git /tmp/p5-Net-WebSocket
-          patch -d /tmp/p5-Net-WebSocket -p1 < contrib/Net-WebSocket-0.24-perl-5.44.patch
+          if grep -Fq ': \ " /' /tmp/p5-Net-WebSocket/t/Net-WebSocket-HTTP.t; then
+            patch -d /tmp/p5-Net-WebSocket -p1 < contrib/Net-WebSocket-0.24-perl-5.44.patch
+          fi
           cd /tmp/p5-Net-WebSocket
           cpanm --installdeps .
           perl Makefile.PL
@@ -38,14 +40,21 @@ jobs:
           make test
           make install
 
-      - name: Install project dependencies
+      - name: Install Linux::Event dependencies
         run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
           git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
           cpanm --notest /tmp/perl-linux-event
           git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
           cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
 
-      - name: Run prototype tests
+      - name: Build distribution
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Run production tests
+        run: make test
+
+      - name: Run architecture prototype tests
         run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t prototype/t/03-linux-event-stream.t prototype/t/04-http-upgrade.t
