@@ -6,8 +6,9 @@ use warnings;
 use parent 'Linux::Event::HTTP::Server::Connection';
 
 use Carp qw(croak);
-use Scalar::Util qw(blessed weaken);
+use Scalar::Util qw(blessed);
 
+use Linux::Event::Kernel::Timer;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 
@@ -57,6 +58,50 @@ sub _report_handshake_error ($self, $error) {
     if (my $callback = $state->{callbacks}{error}) {
         $callback->($self, $message);
     }
+    return;
+}
+
+sub _finish_server_open ($timer) {
+    my $timer_state = $timer->data;
+    my $connection = $timer_state->{connection};
+    return if !$connection || $connection->is_closed;
+
+    if ($connection->isa('Linux::Event::WebSocket::Connection')) {
+        $connection->_ensure_websocket_open;
+        return;
+    }
+
+    my $attempt = ($timer_state->{attempt} // 0) + 1;
+    if ($attempt > 4) {
+        $connection->_report_handshake_error(
+            'WebSocket HTTP Upgrade did not complete protocol handoff'
+        );
+        $connection->SUPER::close if !$connection->is_closed;
+        return;
+    }
+
+    Linux::Event::Kernel::Timer->new(
+        loop     => $connection->loop,
+        after    => 0,
+        data     => {
+            connection => $connection,
+            attempt    => $attempt,
+        },
+        on_timer => \&_finish_server_open,
+    );
+    return;
+}
+
+sub _schedule_server_open ($self) {
+    Linux::Event::Kernel::Timer->new(
+        loop     => $self->loop,
+        after    => 0,
+        data     => {
+            connection => $self,
+            attempt    => 0,
+        },
+        on_timer => \&_finish_server_open,
+    );
     return;
 }
 
@@ -117,14 +162,7 @@ sub on_request ($self, $request, $response) {
 
     my $target = $state->{connection_class};
     $self->transaction->upgrade($target);
-
-    my $connection = $self;
-    weaken($connection);
-    $self->loop->post(sub {
-        return if !$connection || $connection->is_closed;
-        return if !$connection->isa('Linux::Event::WebSocket::Connection');
-        $connection->_ensure_websocket_open;
-    });
+    $self->_schedule_server_open;
     return;
 }
 
