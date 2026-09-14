@@ -38,10 +38,6 @@ use LEWS::Prototype::Connection ();
 
     sub websocket_role ($class) { 'client' }
 
-    sub on_ready ($self) {
-        $self->send_text('hello');
-    }
-
     sub on_websocket_message ($self, $message) {
         push @{ $self->data->{client_messages} }, [
             $message->get_type,
@@ -78,6 +74,7 @@ my $client = Local::WebSocketClient->new(
     data => $state,
 );
 
+ok($client->send_text('hello'), 'adopted client queues first WebSocket message');
 $loop->run_for(2);
 
 is($state->{error}, '', 'Linux::Event transport reported no error');
