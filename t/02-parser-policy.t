@@ -37,12 +37,17 @@ sub dies_like ($code, $pattern, $name) {
     like($error, $pattern, "$name reports expected error");
 }
 
+my $client_payload = 'hello';
+my $server_payload = 'hello';
+my $rsv_payload = 'hello';
+my $ping_payload = 'x';
+
 my $client_text = Net::WebSocket::Frame::text->new(
     mask    => "\x01\x02\x03\x04",
-    payload => 'hello',
+    payload => $client_payload,
 );
 my $server_text = Net::WebSocket::Frame::text->new(
-    payload => 'hello',
+    payload => $server_payload,
 );
 
 is(
@@ -70,7 +75,7 @@ dies_like(
 my $rsv = Net::WebSocket::Frame::text->new(
     mask    => "\x01\x02\x03\x04",
     rsv     => 1,
-    payload => 'hello',
+    payload => $rsv_payload,
 );
 dies_like(
     sub { parser_for('server', $rsv->to_bytes)->get_next_frame },
@@ -80,7 +85,7 @@ dies_like(
 
 my $ping = Net::WebSocket::Frame::ping->new(
     mask    => "\x01\x02\x03\x04",
-    payload => 'x',
+    payload => $ping_payload,
 );
 my $fragmented_ping = $ping->to_bytes;
 substr($fragmented_ping, 0, 1) = chr(ord(substr($fragmented_ping, 0, 1)) & 0x7f);
