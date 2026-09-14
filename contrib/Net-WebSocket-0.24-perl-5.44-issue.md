@@ -33,6 +33,8 @@ A minimal fix is to take the backslash out of `qw()` and add it explicitly:
 +    ( map { "ha${_}he" } (qw~ ( ) < > @ ; : ~, '\\', qw~ " / [ ] ? = { } ~) ),
 ```
 
+I applied that patch to the current upstream source and ran the full Net::WebSocket test suite in GitHub Actions. It passes on both Perl 5.36 and Perl 5.44.0.
+
 This appears to be test-only; I have not found a runtime WebSocket failure associated with it.
 
 I ran into this while evaluating Net::WebSocket as the RFC 6455 engine for `Linux::Event::WebSocket`. The API has been a very good fit, so I wanted to send the compatibility fix upstream regardless of which direction that project ultimately takes.
