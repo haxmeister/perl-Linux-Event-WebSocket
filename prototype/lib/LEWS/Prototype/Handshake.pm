@@ -48,4 +48,40 @@ sub server_from_request ($class, $request, %option) {
     return $handshake;
 }
 
+# Net::WebSocket intentionally owns the WebSocket-specific response semantics.
+# For HTTP stacks that serialize their own response object, translate only the
+# documented to_string() result rather than reaching into handshake internals.
+sub apply_server_response ($class, $handshake, $response) {
+    croak 'apply_server_response(): handshake object is required'
+        if !defined($handshake) || !ref($handshake)
+        || !$handshake->can('to_string');
+    croak 'apply_server_response(): response object is required'
+        if !defined($response) || !ref($response);
+
+    for my $method (qw(status reason add_header)) {
+        croak "apply_server_response(): response object needs $method()"
+            if !$response->can($method);
+    }
+
+    my $wire = $handshake->to_string;
+    my @line = split /\r\n/, $wire, -1;
+    my $status_line = shift @line;
+
+    my ($version, $status, $reason) =
+        $status_line =~ /\AHTTP\/([0-9]+(?:\.[0-9]+)?) ([0-9]{3})(?: (.*))?\z/
+        or croak 'apply_server_response(): invalid handshake status line';
+
+    $response->status($status);
+    $response->reason(defined($reason) ? $reason : '');
+
+    for my $line (@line) {
+        last if $line eq '';
+        my ($name, $value) = $line =~ /\A([^:]+):[ \t]*(.*)\z/
+            or croak 'apply_server_response(): invalid handshake header line';
+        $response->add_header($name, $value);
+    }
+
+    return $response;
+}
+
 1;
