@@ -11,20 +11,20 @@ use Net::WebSocket::Endpoint::Server ();
 use Net::WebSocket::Parser ();
 use LEWS::Prototype::IO ();
 
-sub websocket_role ($class) {
-    croak "$class must define websocket_role() as client or server";
+sub websocket_endpoint_type ($class) {
+    croak "$class must define websocket_endpoint_type() as client or server";
 }
 
 sub _websocket_state ($self) {
     return $self->{_lews_prototype} if $self->{_lews_prototype};
 
-    my $role = $self->websocket_role;
-    croak 'websocket_role() must return client or server'
-        if $role ne 'client' && $role ne 'server';
+    my $endpoint_type = $self->websocket_endpoint_type;
+    croak 'websocket_endpoint_type() must return client or server'
+        if $endpoint_type ne 'client' && $endpoint_type ne 'server';
 
     my $io = LEWS::Prototype::IO->new(stream => $self);
     my $parser = Net::WebSocket::Parser->new($io);
-    my $endpoint_class = $role eq 'client'
+    my $endpoint_class = $endpoint_type eq 'client'
         ? 'Net::WebSocket::Endpoint::Client'
         : 'Net::WebSocket::Endpoint::Server';
 
@@ -35,10 +35,10 @@ sub _websocket_state ($self) {
     $endpoint->do_not_die_on_close;
 
     return $self->{_lews_prototype} = {
-        io       => $io,
-        parser   => $parser,
-        endpoint => $endpoint,
-        role     => $role,
+        io            => $io,
+        parser        => $parser,
+        endpoint      => $endpoint,
+        endpoint_type => $endpoint_type,
     };
 }
 
@@ -46,8 +46,8 @@ sub websocket_endpoint ($self) {
     return $self->_websocket_state->{endpoint};
 }
 
-sub websocket_role_name ($self) {
-    return $self->_websocket_state->{role};
+sub websocket_endpoint_type_name ($self) {
+    return $self->_websocket_state->{endpoint_type};
 }
 
 sub send_text ($self, $payload) {
