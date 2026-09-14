@@ -1,7 +1,7 @@
 # Linux::Event::WebSocket Architecture
 
-This document records the working architecture while the first vertical
-prototype is being built. Public API names are not yet frozen.
+This document records the working architecture while the distribution is being
+implemented. Public API names are not yet frozen.
 
 ## Goals
 
@@ -13,84 +13,123 @@ prototype is being built. Public API names are not yet frozen.
 - Keep HTTP and WebSocket as separate protocol layers.
 - Add native code only after measurement identifies a material bottleneck.
 
+## Inheritance policy
+
+This distribution uses ordinary single inheritance only.
+
+There are no Perl roles, mixins, multiple-inheritance trees, or injected methods
+in the connection design.
+
+The intended class chains are:
+
+```
+Linux::Event::WebSocket::Client::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+and separately:
+
+```
+Linux::Event::WebSocket::Server::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+Client versus server is called the endpoint type. The term "role" is avoided in
+this distribution because it can imply a Perl role/mixin mechanism that is not
+being used.
+
 ## Connection model
 
-An established WebSocket connection is a subclass of
-`Linux::Event::IO::Sock::Stream`.
+An established WebSocket connection is ultimately a
+`Linux::Event::IO::Sock::Stream` through the single-inheritance chain above.
 
 The Stream remains the transport owner. WebSocket adds protocol state and
 application-facing WebSocket operations; it does not wrap or replace the live
 socket after negotiation.
 
-A standalone server owns a `Linux::Event::IO::Sock::Listener`. Accepted streams
-begin in an HTTP-handshake protocol class and transition in place to the
-WebSocket connection class after a successful Upgrade.
+A standalone server uses `Linux::Event::HTTP::Server`. Accepted streams begin as
+HTTP server connections and transition in place to
+`Linux::Event::WebSocket::Server::Connection` after a successful Upgrade.
 
 Conceptually:
 
 ```
-Linux::Event::IO::Sock::Listener
+Linux::Event::HTTP::Server
         |
         v
-HTTP handshake Stream
+HTTP server connection
         |
         | successful Upgrade
         v
-transition_to(WebSocket connection, input => leftover_bytes)
+transition_to(Linux::Event::WebSocket::Server::Connection,
+              input => leftover_bytes)
         |
         v
 established WebSocket Stream
 ```
 
-The transition must preserve the socket, transport state, TLS state, queued
-output, and any already-read bytes following the end of the HTTP headers.
+The transition preserves the socket, transport state, TLS state, queued output,
+application data, and already-read bytes following the end of the HTTP headers.
 Linux::Event core already provides and tests this behavior.
 
-## HTTP boundaries
+## HTTP boundary
 
-### Uniform::HTTP
+`Linux::Event::HTTP` is a normal runtime dependency for the high-level
+WebSocket client/server API.
 
-`Uniform::HTTP::Request` and `Uniform::HTTP::Response` are suitable canonical
-representations for HTTP handshake messages. Uniform::HTTP deliberately does no
-parsing, serialization, or I/O.
+This is deliberate. WebSocket opening negotiation is security-sensitive HTTP/1.1
+protocol work. Linux::Event::HTTP already provides:
 
-A standalone WebSocket listener may therefore use a small handshake byte parser
-to produce a Uniform::HTTP request, then pass the relevant method, version, and
-headers into WebSocket handshake validation.
+- incremental HTTP parsing and serialization;
+- client and server Upgrade validation;
+- TLS integration;
+- output ordering;
+- same-read post-Upgrade byte preservation;
+- in-place `transition_to()` handoff.
 
-Uniform::HTTP should not become the transport or incremental HTTP parser.
+Linux::Event::WebSocket should use that machinery instead of carrying a second
+miniature HTTP parser.
 
-### Linux::Event::HTTP
-
-Linux::Event::HTTP already defines a live-stream Upgrade handoff: after a
-validated `101 Switching Protocols`, the HTTP transaction completes and the
-same Linux::Event Stream transitions to the requested protocol class while
-preserving already-read post-HTTP bytes.
-
-Linux::Event::WebSocket should consume that handoff for applications that are
-already using Linux::Event::HTTP rather than embedding or duplicating the HTTP
-server.
-
-Standalone WebSocket service and Linux::Event::HTTP integration should converge
-on the same established WebSocket connection class.
+`Uniform::HTTP` remains an important semantic contract. The prototype proved
+that `Uniform::HTTP::Request` can drive the documented Net::WebSocket server
+handshake API directly. It is not currently required as a separate runtime
+dependency because Linux::Event::HTTP request/response objects already expose
+the needed message semantics.
 
 ## Initial WebSocket protocol engine
 
-`Net::WebSocket` is the first protocol-engine candidate because it separates
-RFC 6455 logic from transport and HTTP parsing. The prototype must use only its
-documented public APIs.
+`Net::WebSocket` is the initial RFC 6455 protocol engine because it separates
+WebSocket handshake/frame/message semantics from transport and accepts narrow
+reader/writer contracts.
 
-Rules for the experiment:
+The prototype established these rules:
 
 - No access to private object hashes or undocumented methods.
-- Do not make `IO::Framed` a distribution dependency merely because
-  Net::WebSocket examples use it.
-- Supply a small compatible input/output adapter if the documented contracts are
-  sufficient.
-- HTTP::Request and HTTP::Response from the HTTP distribution are not required;
-  Net::WebSocket handshake objects may be fed headers directly.
-- If the adapter becomes invasive or depends on private implementation details,
-  reject the approach rather than entrenching the dependency.
+- `IO::Framed` is not required.
+- A small compatible input/output adapter is sufficient for
+  `Net::WebSocket::Parser` and Endpoint.
+- HTTP::Request and HTTP::Response from Net::WebSocket's HTTP distribution are
+  not required; handshake objects can be fed method/version/header data through
+  documented methods.
+
+## Transition-state rule
+
+Linux::Event constructor callbacks deliberately survive `transition_to()`.
+Linux::Event::HTTP can also deliver already-read post-101 bytes to the target
+class during the transition itself.
+
+Therefore all WebSocket state needed to parse target-protocol input must already
+be attached to the live Stream before handoff.
+
+For the server, the state travels in the HTTP connection's preserved application
+data. For the client, the implementation should use the public low-level
+`Linux::Event::HTTP::Client::Connection` API so WebSocket state is seeded before
+requesting an Upgrade target.
+
+Installing WebSocket state only from the client's `on_upgrade` callback is too
+late for same-read post-101 data.
 
 ## Native-code policy
 
@@ -98,7 +137,7 @@ The first implementation is pure Perl at the WebSocket protocol layer.
 
 WebSocket-specific framing is not currently planned as a built-in
 `Linux::Event::Framer`. Core framers are generic ordered-byte wire policies,
-whereas WebSocket framing includes endpoint-role masking, fragmented logical
+whereas WebSocket framing includes endpoint-specific masking, fragmented logical
 messages, interleaved control frames, and additional protocol state.
 
 If benchmarks later justify native work:
@@ -109,27 +148,30 @@ If benchmarks later justify native work:
 - A likely reusable core direction would be an external incremental native
   byte-consumer/protocol-parser boundary, not a WebSocket-specific core framer.
 
-## First vertical prototype
+## Vertical prototype result
 
-The first milestone is intentionally narrow:
+The first vertical prototype is complete and passing.
 
-1. Accept one plain TCP connection.
-2. Read an HTTP/1.1 WebSocket Upgrade request incrementally.
-3. Represent or expose the request through the chosen HTTP boundary.
-4. Validate/generate WebSocket handshake data with public Net::WebSocket APIs.
-5. Queue the `101 Switching Protocols` response.
-6. Preserve bytes following the HTTP header terminator.
-7. Transition the same Stream into the WebSocket connection class.
-8. Receive one text message.
-9. Echo that text message.
-10. Exercise ping/pong.
-11. Complete a clean close handshake.
+It proves:
 
-Then repeat the same path over TLS.
+1. documented Net::WebSocket handshake APIs accept the intended HTTP message
+   boundary;
+2. no IO::Framed dependency is necessary;
+3. client masking and server unmasked output work over Linux::Event Streams;
+4. text messages, ping/pong, and close control flow work through the adapter;
+5. Linux::Event::HTTP can Upgrade the same live Stream into the WebSocket
+   connection class;
+6. a first masked WebSocket frame sent in the same socket write as the HTTP
+   Upgrade request survives the HTTP parser and `transition_to()` intact;
+7. queued HTTP 101 output and subsequent WebSocket output remain correctly
+   ordered.
+
+GitHub Actions run 34802469241 passed 43 tests across the four prototype test
+files.
 
 ## Benchmark decision gate
 
-Only after the vertical prototype is correct should performance work begin.
+Only after the production API is correct should performance work begin.
 Benchmark at least small, medium, and large messages in both directions, because
 client-to-server masking may have a different cost profile from server-to-client
 traffic.
