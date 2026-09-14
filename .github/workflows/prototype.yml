@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   pull_request:
 
+concurrency:
+  group: websocket-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,18 +31,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Build and test Net::WebSocket
+      - name: Install patched Net::WebSocket
         run: |
           git clone --depth 1 https://github.com/FGasper/p5-Net-WebSocket.git /tmp/p5-Net-WebSocket
           if grep -Fq ': \ " /' /tmp/p5-Net-WebSocket/t/Net-WebSocket-HTTP.t; then
             patch -d /tmp/p5-Net-WebSocket -p1 < contrib/Net-WebSocket-0.24-perl-5.44.patch
           fi
-          cd /tmp/p5-Net-WebSocket
-          cpanm --installdeps .
-          perl Makefile.PL
-          make
-          make test
-          make install
+          cpanm --notest /tmp/p5-Net-WebSocket
 
       - name: Install Linux::Event dependencies
         run: |
