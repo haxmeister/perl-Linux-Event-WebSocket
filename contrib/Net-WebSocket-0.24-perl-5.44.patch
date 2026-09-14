@@ -9,26 +9,18 @@ Keep the backslash test case, but spell that value explicitly outside
 qw().
 
 ---
- t/Net-WebSocket-HTTP.t | 9 ++++++---
- 1 file changed, 6 insertions(+), 3 deletions(-)
+ t/Net-WebSocket-HTTP.t | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/t/Net-WebSocket-HTTP.t b/t/Net-WebSocket-HTTP.t
-index f7a9dfb..0000000 100644
 --- a/t/Net-WebSocket-HTTP.t
 +++ b/t/Net-WebSocket-HTTP.t
-@@ -5,9 +5,12 @@ use Test::More;
- use Test::FailWarnings;
+@@ -6,7 +6,7 @@ use Test::FailWarnings;
  use Test::Exception;
  
--my @invalid = (
+ my @invalid = (
 -    ( map { "ha${_}he" } qw~ ( ) < > @ ; : \ " / [ ] ? = { } ~ ),
-+my @invalid_char = (
-+    qw~ ( ) < > @ ; : ~,
-+    '\\',
-+    qw~ " / [ ] ? = { } ~,
++    ( map { "ha${_}he" } (qw~ ( ) < > @ ; : ~, '\\', qw~ " / [ ] ? = { } ~) ),
  );
-+
-+my @invalid = map { "ha${_}he" } @invalid_char;
  
  plan tests => 5 + @invalid;
- 
