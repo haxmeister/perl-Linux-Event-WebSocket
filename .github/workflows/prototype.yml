@@ -22,6 +22,8 @@ jobs:
           sudo cpanm --notest /tmp/perl-Uniform-HTTP
           git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
           sudo cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          sudo cpanm --notest /tmp/perl-Linux-Event-HTTP
 
       - name: Run prototype tests
-        run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t prototype/t/03-linux-event-stream.t
+        run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t prototype/t/03-linux-event-stream.t prototype/t/04-http-upgrade.t
