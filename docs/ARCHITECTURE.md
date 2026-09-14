@@ -93,26 +93,43 @@ Linux::Event::WebSocket should use that machinery instead of carrying a second
 miniature HTTP parser.
 
 `Uniform::HTTP` remains an important semantic contract. The prototype proved
-that `Uniform::HTTP::Request` can drive the documented Net::WebSocket server
-handshake API directly. It is not currently required as a separate runtime
-dependency because Linux::Event::HTTP request/response objects already expose
-the needed message semantics.
+that `Uniform::HTTP::Request` can drive a WebSocket handshake engine through a
+clean public message boundary. It is not currently required as a separate
+runtime dependency because Linux::Event::HTTP request/response objects already
+expose the needed message semantics.
 
-## Initial WebSocket protocol engine
+## WebSocket protocol engine decision
 
-`Net::WebSocket` is the initial RFC 6455 protocol engine because it separates
-WebSocket handshake/frame/message semantics from transport and accepts narrow
-reader/writer contracts.
+No external WebSocket protocol engine is currently approved as a production
+runtime dependency.
 
-The prototype established these rules:
+`Net::WebSocket` remains a technically strong candidate. The prototype proved
+that its documented public interfaces fit Linux::Event very well:
 
-- No access to private object hashes or undocumented methods.
-- `IO::Framed` is not required.
-- A small compatible input/output adapter is sufficient for
-  `Net::WebSocket::Parser` and Endpoint.
-- HTTP::Request and HTTP::Response from Net::WebSocket's HTTP distribution are
-  not required; handshake objects can be fed method/version/header data through
-  documented methods.
+- no access to private object hashes or undocumented methods is necessary;
+- `IO::Framed` is not required;
+- a small compatible input/output adapter is sufficient for
+  `Net::WebSocket::Parser` and Endpoint;
+- its HTTP::Request/HTTP::Response convenience layer is not required.
+
+However, `Net::WebSocket` 0.24 fails a normal test-driven installation on the
+primary development machine. Earlier prototype CI used `cpanm --notest`, which
+proved API compatibility but hid this installability problem.
+
+Production policy is therefore:
+
+- do not force-install `Net::WebSocket`;
+- do not use `--notest` as an installation requirement or workaround;
+- do not declare it as a runtime prerequisite until normal installs are proven
+  on the supported Perl range;
+- determine whether the failure is a stale test assumption or a real runtime
+  incompatibility before choosing the protocol engine;
+- compare any alternative on API fit, dependency footprint, correctness,
+  maintenance, and installability rather than switching merely to avoid one
+  failing test suite.
+
+The prototype remains valuable evidence about the desired protocol-engine
+boundary even if a different engine is ultimately selected.
 
 ## Transition-state rule
 
@@ -133,7 +150,8 @@ late for same-read post-101 data.
 
 ## Native-code policy
 
-The first implementation is pure Perl at the WebSocket protocol layer.
+The first implementation should remain Perl at the WebSocket protocol layer
+unless measurement demonstrates a material reason otherwise.
 
 WebSocket-specific framing is not currently planned as a built-in
 `Linux::Event::Framer`. Core framers are generic ordered-byte wire policies,
@@ -150,15 +168,15 @@ If benchmarks later justify native work:
 
 ## Vertical prototype result
 
-The first vertical prototype is complete and passing.
+The first vertical prototype is complete and passing when its candidate protocol
+engine is present.
 
 It proves:
 
-1. documented Net::WebSocket handshake APIs accept the intended HTTP message
-   boundary;
-2. no IO::Framed dependency is necessary;
+1. a clean HTTP-message-to-WebSocket-handshake boundary;
+2. no IO::Framed dependency is necessary for the tested engine;
 3. client masking and server unmasked output work over Linux::Event Streams;
-4. text messages, ping/pong, and close control flow work through the adapter;
+4. text messages, ping/pong, and close control flow work through a narrow adapter;
 5. Linux::Event::HTTP can Upgrade the same live Stream into the WebSocket
    connection class;
 6. a first masked WebSocket frame sent in the same socket write as the HTTP
@@ -166,8 +184,9 @@ It proves:
 7. queued HTTP 101 output and subsequent WebSocket output remain correctly
    ordered.
 
-GitHub Actions run 34802469241 passed 43 tests across the four prototype test
-files.
+GitHub Actions run 34802469241 passed 43 prototype tests, but that run installed
+`Net::WebSocket` with tests disabled. New CI explicitly tests normal installation
+on the supported Perl range before the candidate can be promoted.
 
 ## Benchmark decision gate
 
