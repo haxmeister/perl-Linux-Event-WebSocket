@@ -29,16 +29,8 @@ I reproduced this on a threaded perlbrew Perl 5.44.0 and independently on a non-
 A minimal fix is to take the backslash out of `qw()` and add it explicitly:
 
 ```diff
--my @invalid = (
 -    ( map { "ha${_}he" } qw~ ( ) < > @ ; : \ " / [ ] ? = { } ~ ),
--);
-+my @invalid_char = (
-+    qw~ ( ) < > @ ; : ~,
-+    '\\',
-+    qw~ " / [ ] ? = { } ~,
-+);
-+
-+my @invalid = map { "ha${_}he" } @invalid_char;
++    ( map { "ha${_}he" } (qw~ ( ) < > @ ; : ~, '\\', qw~ " / [ ] ? = { } ~) ),
 ```
 
 This appears to be test-only; I have not found a runtime WebSocket failure associated with it.
