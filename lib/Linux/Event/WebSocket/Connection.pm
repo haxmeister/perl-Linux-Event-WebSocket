@@ -12,10 +12,10 @@ use utf8 ();
 
 use Linux::Event::Kernel::Timer;
 use Linux::Event::WebSocket::_IO;
+use Linux::Event::WebSocket::_Parser;
 use Linux::Event::WebSocket::_State;
 use Net::WebSocket::Endpoint::Client ();
 use Net::WebSocket::Endpoint::Server ();
-use Net::WebSocket::Parser ();
 
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;
@@ -75,8 +75,14 @@ sub _initialize_endpoint ($self) {
     my $state = $self->_websocket_state;
     return $state->{endpoint} if $state->{endpoint};
 
-    my $io = Linux::Event::WebSocket::_IO->new(stream => $self);
-    my $parser = Net::WebSocket::Parser->new($io);
+    my %io_option = (stream => $self);
+    $io_option{max_read} = $state->{max_message_size}
+        if defined $state->{max_message_size};
+    my $io = Linux::Event::WebSocket::_IO->new(%io_option);
+    my $parser = Linux::Event::WebSocket::_Parser->new(
+        $io,
+        endpoint_type => $state->{endpoint_type},
+    );
     my $endpoint_class = $state->{endpoint_type} eq 'client'
         ? 'Net::WebSocket::Endpoint::Client'
         : 'Net::WebSocket::Endpoint::Server';
