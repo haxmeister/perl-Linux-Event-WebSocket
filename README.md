@@ -1,37 +1,211 @@
 # Linux::Event::WebSocket
 
-Fast, composable WebSocket client and server built on Linux::Event.
+High-performance WebSocket client and server for Linux::Event, with a simple
+callback-first API.
 
 ## Status
 
-Early architecture and prototype work. This distribution is not yet released.
+Development version: `0.001_001`.
 
-## Direction
+The distribution now has working `ws://` and `wss://` client/server paths and a
+real production test suite. It has not yet been released to CPAN and the public
+API is still allowed to change before the first release.
 
-Linux::Event::WebSocket is a protocol layer for the Linux::Event communications
-ecosystem. It will provide callback-first WebSocket client and server APIs while
-leaving transport, TLS, buffering, backpressure, and lifecycle management to
-Linux::Event.
+Current GitHub Actions coverage passes on Perl 5.36 and Perl 5.44.0.
 
-The initial implementation deliberately starts without WebSocket-specific XS.
-The first milestone is to prove the protocol and HTTP-upgrade boundaries using
-public APIs, then benchmark before deciding whether native protocol machinery is
-warranted.
+## What works today
 
-Key design rules:
+- WebSocket client and server APIs.
+- `ws://` and `wss://`.
+- Text and binary messages.
+- UTF-8 validation and decoding for text messages.
+- Client masking and server unmasked output.
+- Fragmented WebSocket messages through `Net::WebSocket`.
+- Automatic ping/pong control handling plus explicit `ping()`.
+- Graceful WebSocket close handshake with a configurable close timeout.
+- Hard transport abort when graceful close is not appropriate.
+- Subprotocol negotiation.
+- Access to the HTTP handshake request and response.
+- Configurable message-size protection, defaulting to 16 MiB.
+- Linux::Event Stream output buffering and backpressure.
+- Linux::Event TLS transport retained across the HTTP-to-WebSocket transition.
+- Same-read handoff: WebSocket bytes that arrive immediately after the HTTP
+  Upgrade headers are preserved across the protocol transition.
 
-- Established WebSocket connections are Linux::Event socket-stream subclasses.
-- A standalone WebSocket server composes Linux::Event::IO::Sock::Listener.
-- HTTP Upgrade changes protocol in place with Linux::Event transition_to().
-- Net::WebSocket is the initial candidate RFC 6455 protocol engine.
-- Net::WebSocket private internals are off limits.
-- IO::Framed is not a required dependency unless experiments prove it necessary.
-- Uniform::HTTP may provide the framework-neutral handshake request/response
-  representation; it does not own byte parsing or transport.
-- Linux::Event::HTTP integration uses its existing live-stream HTTP Upgrade
-  handoff rather than duplicating an HTTP server inside this distribution.
-- WebSocket-specific native code, if benchmarks justify it, belongs here. Core
-  changes should provide only reusable protocol-engine facilities.
+## Server
 
-See `docs/ARCHITECTURE.md` for the working design and `handoff.md` for current
-exploration status.
+```perl
+use v5.36;
+use Linux::Event::Loop;
+use Linux::Event::WebSocket::Server;
+
+my $loop = Linux::Event::Loop->new;
+
+my $server = Linux::Event::WebSocket::Server->new(
+    loop => $loop,
+    host => '127.0.0.1',
+    port => 8080,
+
+    on_open => sub ($ws) {
+        $ws->send_text('hello');
+    },
+
+    on_message => sub ($ws, $payload, $type) {
+        if ($type eq 'text') {
+            $ws->send_text("echo: $payload");
+        }
+    },
+
+    on_close => sub ($ws, $code, $reason) {
+        # Connection finished.
+    },
+);
+
+$loop->run;
+```
+
+For `wss://`, pass the normal Linux::Event HTTP server `tls` policy containing
+the certificate and key.
+
+## Client
+
+```perl
+use v5.36;
+use Linux::Event::Loop;
+use Linux::Event::WebSocket::Client;
+
+my $loop = Linux::Event::Loop->new;
+
+my $client = Linux::Event::WebSocket::Client->new(
+    loop => $loop,
+
+    on_open => sub ($ws) {
+        $ws->send_text('hello');
+    },
+
+    on_message => sub ($ws, $payload, $type) {
+        say $payload if $type eq 'text';
+    },
+
+    on_close => sub ($ws, $code, $reason) {
+        $loop->stop;
+    },
+);
+
+$client->connect('wss://example.com/socket');
+$loop->run;
+```
+
+## Connection API
+
+Established client and server connections share the common
+`Linux::Event::WebSocket::Connection` API. Important operations include:
+
+```perl
+$ws->send_text($text);
+$ws->send_binary($bytes);
+$ws->ping($bytes);
+$ws->close(code => 'SUCCESS', reason => 'done');
+$ws->abort;
+
+$ws->is_open;
+$ws->is_closing;
+$ws->subprotocol;
+$ws->secure;
+$ws->url;
+$ws->handshake_request;
+$ws->handshake_response;
+$ws->data;
+```
+
+`close()` starts the WebSocket close handshake. `abort()` closes the underlying
+transport immediately.
+
+## Architecture
+
+Linux::Event::WebSocket deliberately composes the existing ecosystem instead of
+reimplementing each layer:
+
+```text
+Linux::Event
+    socket, TLS, ordered bytes, buffering, backpressure, lifecycle
+        |
+Linux::Event::HTTP
+    HTTP/1.1 opening Upgrade and live-stream handoff
+        |
+Linux::Event::WebSocket
+    WebSocket connection API and protocol policy
+        |
+Net::WebSocket
+    RFC 6455 frames, messages, fragmentation, masking, control semantics
+```
+
+A successful HTTP Upgrade calls Linux::Event's in-place `transition_to()` on the
+same live connection. The socket, TLS transport, queued output, application
+state, and already-read post-HTTP bytes stay attached.
+
+There is no second miniature HTTP parser in this distribution.
+
+## Inheritance policy
+
+Connection classes use ordinary single inheritance only:
+
+```text
+Linux::Event::WebSocket::Client::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+and separately:
+
+```text
+Linux::Event::WebSocket::Server::Connection
+    -> Linux::Event::WebSocket::Connection
+    -> Linux::Event::IO::Sock::Stream
+```
+
+There are no Perl roles, mixins, multiple-inheritance trees, or method injection
+in the connection design.
+
+## Net::WebSocket status
+
+`Net::WebSocket` is currently the RFC 6455 engine and is kept behind private
+adapter classes so it can be replaced without changing the public API.
+
+Released `Net::WebSocket` 0.24 has a test-only Perl 5.44 compatibility problem:
+a warning produced by a backslash inside a `qw()` list is promoted to a test
+failure by `Test::FailWarnings`. A one-line patch is stored in:
+
+```text
+contrib/Net-WebSocket-0.24-perl-5.44.patch
+```
+
+The patched upstream suite passes on both Perl 5.36 and Perl 5.44.0. An upstream
+issue has been filed. Development CI applies the patch while waiting for an
+upstream response. This is not intended to become a force-install or `--notest`
+requirement for users.
+
+## Protocol policy
+
+The wrapper enforces peer-side RFC 6455 rules that should not depend on a generic
+transport-neutral parser, including:
+
+- clients must mask frames sent to servers;
+- servers must not mask frames sent to clients;
+- RSV bits are rejected while no extensions are negotiated;
+- control frames must be final and no larger than 125 bytes;
+- close payload, status-code, and UTF-8 reason validation;
+- frame/message size limits before accepting large advertised payloads.
+
+## Native-code policy
+
+The initial implementation intentionally has no WebSocket-specific XS.
+
+If benchmarks later show that parsing or masking is a material bottleneck,
+WebSocket-specific native code belongs in this distribution. Linux::Event core
+should change only when a reusable facility would benefit multiple protocol
+distributions. A WebSocket-specific built-in core framer is not currently
+planned.
+
+See `docs/ARCHITECTURE.md` for the detailed design and `handoff.md` for the
+current development state and next work.
