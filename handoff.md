@@ -8,17 +8,37 @@ Default branch: `main`
 
 ## Current status
 
-The architecture prototype is successful, but the WebSocket protocol-engine
-dependency is not yet selected for production. No CPAN release has been made.
+The architecture prototype is successful. No CPAN release has been made yet.
 
-GitHub Actions run 34802469241 passed all four prototype files: 43 tests total
-against released `Net::WebSocket` 0.24, `Uniform::HTTP` 0.02, Linux::Event
-0.114, and Linux::Event::HTTP 0.001. That run installed Net::WebSocket with
-`--notest`, so it proves API compatibility but not normal installability.
+The original prototype proved API compatibility with released
+`Net::WebSocket` 0.24, but initially used `--notest`. A normal installation was
+then tested on Perl 5.36 and Perl 5.44.0:
 
-The primary development machine reports that `Net::WebSocket` fails its test
-suite during a normal installation. The dependency is therefore blocked pending
-investigation and must not be force-installed as part of the production design.
+- Perl 5.36: Net::WebSocket 0.24 installs normally.
+- Perl 5.44.0: Net::WebSocket 0.24 fails only because
+  `t/Net-WebSocket-HTTP.t` triggers the new warning
+  `Possible attempt to escape whitespace in qw() list`.
+- The warning is promoted to a failure by `Test::FailWarnings`.
+- The remaining Net::WebSocket test programs pass on Perl 5.44.0.
+- This is therefore a test-suite compatibility bug, not a demonstrated runtime
+  WebSocket failure.
+
+A minimal patch is stored at:
+
+`contrib/Net-WebSocket-0.24-perl-5.44.patch`
+
+An upstream issue draft is stored at:
+
+`contrib/Net-WebSocket-0.24-perl-5.44-issue.md`
+
+The patch has been applied to the current Felipe Gasper upstream source and the
+full Net::WebSocket test suite passes with it on both Perl 5.36 and Perl 5.44.0
+in GitHub Actions. The Linux::Event::WebSocket prototype tests also pass in both
+matrix jobs.
+
+The GitHub connector cannot create an issue in `FGasper/p5-Net-WebSocket`
+(permission denied), so the issue draft must be posted upstream manually or
+submitted from a normal fork/PR workflow.
 
 ## Proven boundaries
 
@@ -70,32 +90,23 @@ not being used.
 ## Dependency decisions
 
 `Linux::Event::HTTP` is planned as a normal runtime dependency for the
-high-level WebSocket client/server API. The HTTP handshake is security-sensitive
-protocol work, and Linux::Event::HTTP already provides the exact client/server
-Upgrade validation, TLS integration, output ordering, and same-read handoff
-needed here.
+high-level WebSocket client/server API. It owns the opening HTTP/1.1 Upgrade
+exchange, TLS integration, output ordering, and same-read handoff.
 
 Do not add a second miniature HTTP parser to Linux::Event::WebSocket merely to
 avoid that dependency.
 
 `Uniform::HTTP` remains an important semantic contract and the prototype proves
-compatibility, but it is not currently needed as a direct runtime dependency by
-this distribution. Linux::Event::HTTP message objects expose the same relevant
-message behavior.
+compatibility, but it is not currently needed as a direct runtime dependency.
 
-No external WebSocket protocol engine is currently approved as a production
-runtime dependency.
+`Net::WebSocket` remains the technically preferred RFC 6455 candidate at this
+point because its public API fits the Linux::Event architecture cleanly. Its
+Perl 5.44 installation failure has now been reduced to one verified test-only
+compatibility bug with a one-line fix. Whether to make Net::WebSocket a formal
+runtime dependency should be decided after the upstream report/patch is sent
+and after considering release/maintenance implications.
 
-`Net::WebSocket` remains a technically strong candidate because its public API
-fit is excellent, but version 0.24 currently fails a normal test-driven install
-on the primary development machine. Do not use `--notest` as a production
-workaround and do not declare Net::WebSocket in `PREREQ_PM` until this is
-resolved.
-
-CI has been changed to install `Net::WebSocket` normally, with tests enabled, on
-Perl 5.36 and Perl 5.44.0. The result of that matrix should be used to help
-distinguish a modern-Perl problem from a machine-specific or dependency-specific
-problem.
+Do not use `--notest` as a production workaround.
 
 ## Agreed architecture
 
@@ -108,26 +119,24 @@ problem.
   `Linux::Event::WebSocket::Server::Connection`.
 - High-level coordinators are planned as `Linux::Event::WebSocket::Client` and
   `Linux::Event::WebSocket::Server`.
-- `Linux::Event::HTTP` owns the opening HTTP/1.1 Upgrade exchange.
+- `Linux::Event::HTTP` owns the HTTP Upgrade exchange.
 - Linux::Event owns transport, TLS, buffering, backpressure, lifecycle, and
   `transition_to()`.
-- The WebSocket engine must remain behind a narrow internal boundary so it can be
+- The WebSocket engine stays behind a narrow internal boundary so it can be
   replaced without changing the public API.
 
 ## Transition-state rule
 
 Linux::Event constructor callbacks deliberately survive `transition_to()`.
-HTTP also feeds same-read post-101 bytes to the target during transition before
-client `on_upgrade` fires. Therefore WebSocket protocol/application state must
-be attached to the live connection before handoff.
+Linux::Event::HTTP may deliver already-read post-101 bytes to the target class
+during the transition before the client `on_upgrade` callback fires.
 
-Server-side state can be carried in the HTTP Server connection data/state and
-preserved through transition. Client-side work should use the public low-level
-`Linux::Event::HTTP::Client::Connection` so WebSocket state can be seeded at
-connect time before requesting `upgrade_to`.
+Therefore WebSocket protocol/application state needed to parse target-protocol
+input must already be attached to the live connection before handoff.
 
-Do not try to install WebSocket state only from the client `on_upgrade`
-callback; that is too late for same-read post-101 data.
+Server state can travel in the HTTP connection data. Client implementation
+should use the public low-level `Linux::Event::HTTP::Client::Connection` API so
+WebSocket state is seeded before requesting `upgrade_to`.
 
 ## Native-code policy
 
@@ -149,17 +158,17 @@ incremental native byte-consumer boundary.
 - `prototype/t/03-linux-event-stream.t`
 - `prototype/t/04-http-upgrade.t`
 - `.github/workflows/prototype.yml`
-
-These are evidence, not the final public namespace.
+- `contrib/Net-WebSocket-0.24-perl-5.44.patch`
+- `contrib/Net-WebSocket-0.24-perl-5.44-issue.md`
 
 ## Next implementation work
 
-1. Diagnose the normal `Net::WebSocket` installation failure across Perl 5.36
-   and 5.44 and compare it with the primary development machine failure.
-2. Decide whether to patch/contribute upstream, select another protocol engine,
-   or implement the small protocol layer locally.
-3. Only after that decision, promote the established connection into the real
-   namespace.
+1. Post the prepared compatibility report/patch upstream to Felipe.
+2. Decide whether the verified test-only Perl 5.44 issue is acceptable while an
+   upstream release is pending, or whether production should avoid the
+   dependency until a fixed Net::WebSocket release exists.
+3. Promote the established connection into the real namespace once that
+   dependency decision is made.
 4. Implement high-level Server using Linux::Event::HTTP::Server Upgrade.
 5. Implement Client using Linux::Event::HTTP::Client::Connection with state
    attached before handoff.
