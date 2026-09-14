@@ -11,6 +11,8 @@ use Linux::Event::WebSocket::Server::_HTTPConnection;
 
 our $VERSION = '0.001_001';
 
+my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
+
 sub _load_connection_class ($class) {
     croak 'new(): connection_class must be a package name'
         if !defined($class) || ref($class)
@@ -84,12 +86,12 @@ sub new ($class, %option) {
         'new(): close_timeout',
         exists($option{close_timeout}) ? delete($option{close_timeout}) : 5,
     );
-    my $max_message_size = exists($option{max_message_size})
-        ? _positive_integer(
-            'new(): max_message_size',
-            delete($option{max_message_size}),
-        )
-        : undef;
+    my $max_message_size = _positive_integer(
+        'new(): max_message_size',
+        exists($option{max_message_size})
+            ? delete($option{max_message_size})
+            : $DEFAULT_MAX_MESSAGE_SIZE,
+    );
     my $data = delete $option{data};
     my $secure = exists($option{tls}) ? 1 : 0;
 
@@ -204,6 +206,12 @@ backpressure semantics.
 C<on_handshake> is optional and receives the parsed HTTP Request before
 WebSocket validation. Return true to continue or false to reject the Upgrade
 with HTTP 403.
+
+=head1 LIMITS
+
+C<max_message_size> defaults to 16 MiB and may be set to another positive byte
+limit. The same bound also protects the frame reader from allocating an
+unreasonably large single frame.
 
 =head1 SUBPROTOCOLS
 
