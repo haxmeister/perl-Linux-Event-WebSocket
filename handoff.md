@@ -77,25 +77,33 @@ t/03-engine.t
 t/10-client-server.t
 t/11-message-types.t
 t/12-upgrade-tail.t
+t/13-core-close-boundary.t
 t/20-tls-client-server.t
 ```
 
 Coverage includes deterministic RFC handshake vectors, incremental parsing,
 masking and length policy, fragmentation, control frames, close errors, size
 limits, production HTTP handoff, same-read Upgrade tails, object identity,
-subprotocols, and TLS.
+subprotocols, TLS, and the Linux::Event protocol-subclass close boundary.
 
 CI targets Perl 5.36 and Perl 5.44.
 
+## Resolved core close boundary
+
+The inherited Stream `close()` collision has been resolved in Linux::Event
+0.115. Core involuntary teardown now bypasses protocol-subclass public
+`close()` semantics, while explicit semantic close requests remain virtual.
+
+This distribution now requires Linux::Event 0.115 or newer.
+`t/13-core-close-boundary.t` verifies the WebSocket side of that contract.
+
 ## Remaining release work
 
-1. Audit the inherited Stream `close()` collision. Internal transport failures
-   must not accidentally dispatch to graceful WebSocket close.
-2. Test against an independent peer and the Autobahn WebSocket test suite.
-3. Add adverse close-race and abrupt-EOF integration coverage.
-4. Benchmark only after correctness and the API are stable; add native code only
+1. Test against an independent peer and the Autobahn WebSocket test suite.
+2. Add adverse close-race and abrupt-EOF integration coverage.
+3. Benchmark only after correctness and the API are stable; add native code only
    for a measured bottleneck.
-5. Perform a release-readiness review before the first CPAN upload.
+4. Perform a release-readiness review before the first CPAN upload.
 
 ## Files to read first
 
@@ -107,5 +115,6 @@ lib/Linux/Event/WebSocket/_Parser.pm
 lib/Linux/Event/WebSocket/_Engine.pm
 t/10-client-server.t
 t/12-upgrade-tail.t
+t/13-core-close-boundary.t
 t/20-tls-client-server.t
 ```

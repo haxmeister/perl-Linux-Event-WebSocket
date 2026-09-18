@@ -115,15 +115,22 @@ Protocol violations produce the applicable close status when possible:
 - 1007 for invalid UTF-8 payloads;
 - 1009 for configured size-limit violations.
 
-## Open audit item: Stream close override
+## Stream close ownership
 
-`Linux::Event::WebSocket::Connection` overrides the inherited Stream `close()`
-name to mean graceful WebSocket close. Linux::Event core contains internal
-dynamic `$self->close` calls in some failure paths.
+`Linux::Event::WebSocket::Connection` intentionally overrides the inherited
+Stream `close()` name to mean the RFC 6455 graceful close handshake. Immediate
+transport termination remains `abort()`.
 
-Before API freeze, those paths must be audited so a hard transport failure can
-never accidentally dispatch to graceful WebSocket close. If necessary, adjust
-the public naming or guarded dispatch before release.
+Linux::Event 0.115 establishes the complementary core invariant: involuntary
+Stream teardown uses private terminal-close machinery instead of dynamically
+dispatching through a protocol subclass's public `close()`. This lets a
+protocol subclass give `close()` protocol-level semantics without risking a
+transport failure accidentally starting a graceful protocol shutdown.
+
+This distribution therefore requires Linux::Event 0.115 or newer. Regression
+test `t/13-core-close-boundary.t` verifies that forced Stream cleanup of a
+WebSocket subclass bypasses its public `close()`, does not initialize the
+WebSocket engine, and still closes the underlying descriptor.
 
 ## Test coverage
 
@@ -147,5 +154,4 @@ reusable facility useful to multiple protocol distributions.
 - `permessage-deflate` negotiation and compression;
 - WebSocket-specific XS;
 - async/await-first APIs;
-- independent-peer and Autobahn interoperability testing;
-- the Stream `close()` audit described above.
+- independent-peer and Autobahn interoperability testing.
