@@ -18,9 +18,17 @@ for my $agent (sort keys %$report) {
     for my $case (sort keys %{$report->{$agent}}) {
         my $result = $report->{$agent}{$case};
         my $status = $result->{behavior} // 'UNKNOWN';
+        my $close_status = $result->{behaviorClose} // 'UNKNOWN';
         ++$behavior{$status};
-        push @failure, [ $agent, $case, $status, $result->{reportfile} ]
-            if !$allowed{$status};
+        ++$behavior{"close:$close_status"};
+
+        push @failure, [
+            $agent, $case, "behavior=$status", $result->{reportfile},
+        ] if !$allowed{$status};
+
+        push @failure, [
+            $agent, $case, "close=$close_status", $result->{reportfile},
+        ] if !$allowed{$close_status};
     }
 }
 
