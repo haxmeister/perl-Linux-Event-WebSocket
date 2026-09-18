@@ -110,3 +110,86 @@ jobs:
           name: autobahn-server-report
           path: xt/autobahn/reports
           if-no-files-found: warn
+
+  client-conformance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build WebSocket distribution
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Start Autobahn fuzzing server
+        run: |
+          mkdir -p xt/autobahn/reports
+          docker run --rm --network host \
+            --name autobahn-fuzzingserver \
+            -v "$PWD/xt/autobahn:/config:ro" \
+            -v "$PWD/xt/autobahn/reports:/reports" \
+            crossbario/autobahn-testsuite \
+            wstest --mode fuzzingserver --spec /config/fuzzingserver.json \
+            > /tmp/autobahn-fuzzingserver.log 2>&1 &
+          echo $! > /tmp/autobahn-fuzzingserver.pid
+
+          for attempt in {1..100}; do
+            if (echo > /dev/tcp/127.0.0.1/9001) >/dev/null 2>&1; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/autobahn-fuzzingserver.pid)" 2>/dev/null; then
+              cat /tmp/autobahn-fuzzingserver.log
+              exit 1
+            fi
+            sleep 0.1
+          done
+
+          cat /tmp/autobahn-fuzzingserver.log
+          exit 1
+
+      - name: Run Perl WebSocket client against Autobahn
+        run: perl -Iblib/lib xt/autobahn/client-driver.pl
+
+      - name: Check Autobahn client report
+        run: |
+          test -f xt/autobahn/reports/clients/index.json
+          perl xt/autobahn/check-report.pl \
+            xt/autobahn/reports/clients/index.json
+
+      - name: Show Autobahn fuzzing-server log
+        if: always()
+        run: cat /tmp/autobahn-fuzzingserver.log || true
+
+      - name: Stop Autobahn fuzzing server
+        if: always()
+        run: docker stop autobahn-fuzzingserver 2>/dev/null || true
+
+      - name: Upload Autobahn client report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-client-report
+          path: xt/autobahn/reports/clients
+          if-no-files-found: warn
