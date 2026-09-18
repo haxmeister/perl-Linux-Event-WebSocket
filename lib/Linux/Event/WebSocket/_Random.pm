@@ -4,16 +4,30 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Fcntl qw(O_RDONLY);
+use Fcntl qw(FD_CLOEXEC F_GETFD F_SETFD O_RDONLY);
+
+my $RANDOM_FH;
+
+sub _random_fh () {
+    return $RANDOM_FH if $RANDOM_FH;
+
+    sysopen($RANDOM_FH, '/dev/urandom', O_RDONLY)
+        or die "open /dev/urandom: $!";
+
+    my $flags = fcntl($RANDOM_FH, F_GETFD, 0);
+    die "fcntl(F_GETFD) /dev/urandom: $!" if !defined $flags;
+    fcntl($RANDOM_FH, F_SETFD, $flags | FD_CLOEXEC)
+        or die "fcntl(F_SETFD) /dev/urandom: $!";
+
+    return $RANDOM_FH;
+}
 
 sub bytes ($class, $length) {
     croak 'bytes(): length must be a positive integer'
         if !defined($length) || ref($length)
         || "$length" !~ /\A[0-9]+\z/ || $length < 1;
 
-    sysopen(my $fh, '/dev/urandom', O_RDONLY)
-        or die "open /dev/urandom: $!";
-
+    my $fh = _random_fh();
     my $bytes = '';
     while (length($bytes) < $length) {
         my $read = sysread($fh, $bytes, $length - length($bytes), length($bytes));
@@ -22,7 +36,6 @@ sub bytes ($class, $length) {
         die "read /dev/urandom: unexpected EOF" if $read == 0;
     }
 
-    close($fh) or die "close /dev/urandom: $!";
     return $bytes;
 }
 

@@ -48,6 +48,22 @@ sub regex_validate ($bytes) {
     return $bytes =~ $RFC3629 ? 1 : 0;
 }
 
+sub decode_validate ($bytes) {
+    my $copy = "$bytes";
+    return 0 if !utf8::downgrade($copy, 1);
+    return 0 if !utf8::decode($copy);
+    return 0 if $copy =~ /[\x{d800}-\x{dfff}]|[^\x{0}-\x{10ffff}]/;
+    return 1;
+}
+
+sub ascii_fast_validate ($bytes) {
+    return 1 if $bytes !~ /[\x80-\xff]/;
+    return eval {
+        Linux::Event::WebSocket::_UTF8->validate_bytes($bytes);
+        1;
+    } ? 1 : 0;
+}
+
 sub measure ($name, $size, $code) {
     my $start = time;
     my $deadline = $start + $seconds;
@@ -85,10 +101,18 @@ my %invalid = (
 for my $name (sort keys %valid) {
     die "regex validator rejected valid vector $name\n"
         if !regex_validate($valid{$name});
+    die "decode validator rejected valid vector $name\n"
+        if !decode_validate($valid{$name});
+    die "ASCII-fast validator rejected valid vector $name\n"
+        if !ascii_fast_validate($valid{$name});
 }
 for my $name (sort keys %invalid) {
     die "regex validator accepted invalid vector $name\n"
         if regex_validate($invalid{$name});
+    die "decode validator accepted invalid vector $name\n"
+        if decode_validate($invalid{$name});
+    die "ASCII-fast validator accepted invalid vector $name\n"
+        if ascii_fast_validate($invalid{$name});
 }
 
 say "operation                            bytes        rate";
@@ -104,22 +128,33 @@ for my $size (64, 1024, 16_384) {
         die "regex validation failure\n" if !regex_validate($payload);
     });
 
-    measure('random current open/read/close', 4, sub {
+    measure('UTF8 utf8::decode candidate', $size, sub {
+        die "decode validation failure\n" if !decode_validate($payload);
+    });
+
+    measure('UTF8 ASCII fast path', $size, sub {
+        die "ASCII-fast validation failure\n" if !ascii_fast_validate($payload);
+    });
+
+    measure('random production persistent', 4, sub {
         Linux::Event::WebSocket::_Random->bytes(4);
     });
 
-    measure('random persistent fd', 4, sub {
+    measure('random benchmark persistent', 4, sub {
+        Linux::Event::WebSocket::_Random->bytes(4);
+    });
+
         persistent_random(4);
     });
 
-    measure('frame current random mask', $size, sub {
+    measure('frame production random mask', $size, sub {
         Linux::Event::WebSocket::_Frame->encode(
             binary => $payload,
             masked => 1,
         );
     });
 
-    measure('frame persistent random mask', $size, sub {
+    measure('frame benchmark persistent', $size, sub {
         my $mask = persistent_random(4);
         Linux::Event::WebSocket::_Frame->encode(
             binary => $payload,
