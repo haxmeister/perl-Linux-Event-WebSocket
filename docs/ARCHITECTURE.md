@@ -154,12 +154,24 @@ strict OK, 4 NON-STRICT, and 3 INFORMATIONAL outcomes; close behavior reports
 298 OK and 3 INFORMATIONAL outcomes. There are no conformance failures. No
 Autobahn/Python code is linked into or shipped with the distribution.
 
-## Native-code policy
+## Performance and native-code policy
 
-The protocol layer remains Perl until measurement demonstrates a material
-bottleneck. If parsing or masking later justifies native work, WebSocket-specific
-code belongs in this distribution. Linux::Event core should change only for a
-reusable facility useful to multiple protocol distributions.
+Repository benchmarks cover protocol primitives and steady-state public
+client/server echo workloads. The first benchmark pass identified two material
+costs: reopening `/dev/urandom` for every client mask and byte-by-byte Perl
+UTF-8 validation.
+
+Both were improved without native code. `_Random` now retains a lazy
+close-on-exec random descriptor. `_UTF8` uses an ASCII fast path and C-backed
+`utf8::decode`, followed by explicit RFC 3629 scalar-range checks.
+
+The resulting text-path improvement is large enough that current measurements
+do not justify WebSocket-specific XS. See `docs/BENCHMARKS.md` for methodology
+and representative results.
+
+If later measurement shows a remaining material bottleneck, WebSocket-specific
+native code belongs in this distribution. Linux::Event core should change only
+for a reusable facility useful to multiple protocol distributions.
 
 ## Deferred work
 

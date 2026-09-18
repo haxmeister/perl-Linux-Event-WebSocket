@@ -104,6 +104,26 @@ rejects Unicode noncharacters that RFC 3629 permits. The private `_UTF8`
 validator now implements the RFC 3629 byte boundary directly and is covered by
 `t/04-utf8.t`.
 
+## Performance baseline
+
+Repository author benchmarks now cover protocol primitives and steady-state
+public client/server echo workloads. The first pass found two concrete
+bottlenecks:
+
+- opening and closing `/dev/urandom` for every client mask;
+- byte-by-byte Perl UTF-8 validation.
+
+Both were resolved without XS. `_Random` now reuses a lazy close-on-exec random
+descriptor. `_UTF8` uses an ASCII fast path plus C-backed `utf8::decode` with
+explicit RFC 3629 scalar-range checks.
+
+Representative hosted-runner results improved 1 KiB text echo from roughly
+1.4k to 14.7k msg/s and 16 KiB text echo from roughly 97 to 5.7k msg/s.
+Normal CI and Autobahn client/server conformance remain green.
+
+See `docs/BENCHMARKS.md`. Current measurements do not justify
+WebSocket-specific XS.
+
 ## Resolved core close boundary
 
 The inherited Stream `close()` collision has been resolved in Linux::Event
@@ -115,14 +135,13 @@ This distribution now requires Linux::Event 0.115 or newer.
 
 ## Remaining release work
 
-1. Benchmark only after correctness and the API are stable; add native code only
-   for a measured bottleneck.
-2. Perform a release-readiness review before the first CPAN upload.
+1. Perform a release-readiness review before the first CPAN upload.
 
 ## Files to read first
 
 ```text
 docs/ARCHITECTURE.md
+docs/BENCHMARKS.md
 lib/Linux/Event/WebSocket/Connection.pm
 lib/Linux/Event/WebSocket/_Handshake.pm
 lib/Linux/Event/WebSocket/_Parser.pm
