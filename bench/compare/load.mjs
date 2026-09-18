@@ -103,7 +103,7 @@ function allOpened() {
 }
 
 for (let i = 0; i < clients; ++i) {
-  const ws = new WebSocket(`ws://${host}:${port}/benchmark`, {
+  const ws = new WebSocket(`ws://${host}:${port}/benchmark?type=${type}`, {
     perMessageDeflate: false,
     maxPayload: 32 * 1024 * 1024,
   });

@@ -12,13 +12,15 @@ app->secrets(['benchmark-only-secret']);
 websocket '/benchmark' => sub ($c) {
     $c->inactivity_timeout(300);
 
-    $c->on(message => sub ($c, $text) {
-        $c->send({text => $text});
-    });
-
-    $c->on(binary => sub ($c, $bytes) {
-        $c->send({binary => $bytes});
-    });
+    if (($c->param('type') // 'text') eq 'binary') {
+        $c->on(message => sub ($c, $bytes) {
+            $c->send({binary => $bytes});
+        });
+    } else {
+        $c->on(message => sub ($c, $text) {
+            $c->send({text => $text});
+        });
+    }
 };
 
 app->start('daemon', '-l', "http://127.0.0.1:$port");
