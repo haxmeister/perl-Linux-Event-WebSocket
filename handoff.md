@@ -92,10 +92,12 @@ transport loss, simultaneous close, and peer loss during local close.
 
 CI targets Perl 5.36 and Perl 5.44.
 
-Repository-only Autobahn server conformance is also green. The RFC 6455
-correctness run excludes section 12 performance/limit probes and section 13
-permessage-deflate. Current result: 294 strict OK, 4 NON-STRICT, 3
-INFORMATIONAL; close behavior: 298 OK and 3 INFORMATIONAL.
+Repository-only Autobahn server and client conformance are green. Both RFC
+6455 runs execute 301 selected cases and exclude sections 12 and 13, which
+cover optional WebSocket compression/permessage-deflate. Each side currently
+reports 294 strict OK, 4 NON-STRICT, and 3 INFORMATIONAL outcomes; close
+behavior reports 298 OK and 3 INFORMATIONAL outcomes. There are no conformance
+failures.
 
 The first Autobahn run exposed one real issue: Perl Encode's strict UTF-8 policy
 rejects Unicode noncharacters that RFC 3629 permits. The private `_UTF8`
@@ -113,11 +115,9 @@ This distribution now requires Linux::Event 0.115 or newer.
 
 ## Remaining release work
 
-1. Run Autobahn client conformance so the Linux::Event::WebSocket client is
-   exercised against an independent fuzzing server as thoroughly as the server.
-2. Benchmark only after correctness and the API are stable; add native code only
+1. Benchmark only after correctness and the API are stable; add native code only
    for a measured bottleneck.
-3. Perform a release-readiness review before the first CPAN upload.
+2. Perform a release-readiness review before the first CPAN upload.
 
 ## Files to read first
 

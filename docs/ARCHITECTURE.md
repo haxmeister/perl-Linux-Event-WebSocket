@@ -146,12 +146,13 @@ and local TLS client/server operation.
 
 CI targets Perl 5.36 and Perl 5.44.
 
-Repository-only Autobahn server conformance provides an independent black-box
-RFC 6455 check. With section 12 performance/limit probes and section 13
-permessage-deflate excluded, the server currently reports 294 strict OK,
-4 NON-STRICT, and 3 INFORMATIONAL outcomes; close behavior reports 298 OK and
-3 INFORMATIONAL outcomes. No Autobahn/Python code is linked into or shipped
-with the distribution.
+Repository-only Autobahn conformance provides independent black-box RFC 6455
+checks for both server and client. Each side runs 301 selected cases with
+sections 12 and 13 excluded because they cover optional WebSocket
+compression/permessage-deflate. Both server and client currently report 294
+strict OK, 4 NON-STRICT, and 3 INFORMATIONAL outcomes; close behavior reports
+298 OK and 3 INFORMATIONAL outcomes. There are no conformance failures. No
+Autobahn/Python code is linked into or shipped with the distribution.
 
 ## Native-code policy
 
@@ -164,5 +165,4 @@ reusable facility useful to multiple protocol distributions.
 
 - `permessage-deflate` negotiation and compression;
 - WebSocket-specific XS;
-- async/await-first APIs;
-- Autobahn client-side conformance testing.
+- async/await-first APIs.
