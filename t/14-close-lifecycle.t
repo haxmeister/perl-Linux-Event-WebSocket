@@ -106,6 +106,7 @@ subtest 'simultaneous close preserves peer close values exactly once' => sub {
         errors       => [],
     );
     my ($server_ws, $client_ws);
+    my $server;
 
     my $guard = guard_timer($loop, 'simultaneous close test timed out');
 
@@ -125,7 +126,6 @@ subtest 'simultaneous close preserves peer close values exactly once' => sub {
         $client_ws->close(code => 1000, reason => 'client done');
     };
 
-    my $server;
     $server = Linux::Event::WebSocket::Server->new(
         loop => $loop,
         host => '127.0.0.1',
