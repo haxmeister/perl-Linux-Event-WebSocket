@@ -1,0 +1,5 @@
+module linux-event-websocket-benchmark
+
+go 1.27
+
+require github.com/gorilla/websocket v1.5.3

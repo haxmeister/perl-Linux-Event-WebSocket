@@ -1,0 +1,105 @@
+name: WebSocket implementation comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/comparison.yml'
+      - 'bench/compare/**'
+      - 'lib/Linux/Event/WebSocket/**'
+
+concurrency:
+  group: websocket-comparison-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Install competitor dependencies
+        run: |
+          cpanm --notest Mojolicious@9.49
+          npm install --prefix bench/compare
+          (
+            cd bench/compare/go
+            go mod download
+            go build -o /tmp/gorilla-websocket-bench .
+          )
+
+      - name: Build Linux::Event::WebSocket
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            perl -MMojolicious -e 'print "mojolicious=$Mojolicious::VERSION\n"'
+            echo "node=$(node --version)"
+            node -e "console.log('ws=' + require('./bench/compare/node_modules/ws/package.json').version)"
+            node -e "console.log('bufferutil=' + require('./bench/compare/node_modules/bufferutil/package.json').version)"
+            echo "go=$(go version)"
+            (
+              cd bench/compare/go
+              go list -m github.com/gorilla/websocket
+            )
+            echo "server_cpu=0"
+            if [ "$(nproc)" -ge 2 ]; then
+              echo "load_generator_cpu=1"
+            else
+              echo "load_generator_cpu=shared"
+            fi
+            echo "gorilla_GOMAXPROCS=1"
+          } | tee comparison-environment.txt
+
+      - name: Run comparison
+        run: bash bench/compare/run-comparison.sh comparison.csv
+
+      - name: Show results
+        run: cat comparison.csv
+
+      - name: Upload comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-implementation-comparison
+          path: |
+            comparison.csv
+            comparison-environment.txt
