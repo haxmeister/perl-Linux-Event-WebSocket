@@ -141,9 +141,6 @@ for my $size (64, 1024, 16_384) {
     });
 
     measure('random benchmark persistent', 4, sub {
-        Linux::Event::WebSocket::_Random->bytes(4);
-    });
-
         persistent_random(4);
     });
 
