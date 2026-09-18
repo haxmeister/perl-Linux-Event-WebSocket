@@ -50,6 +50,7 @@ sub encode ($class, $text) {
 
     my $copy = "$text";
     if (!utf8::is_utf8($copy)) {
+        return $copy if $copy !~ /[\x80-\xff]/;
         $class->validate_bytes($copy);
         return $copy;
     }

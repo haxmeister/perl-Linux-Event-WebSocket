@@ -6,6 +6,8 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/profile.yml'
+      - 'lib/Linux/Event/WebSocket/**'
+      - 'bench/compare/clients/linux-event.pl'
 
 concurrency:
   group: websocket-profile-${{ github.ref }}

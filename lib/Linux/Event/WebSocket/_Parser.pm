@@ -31,10 +31,15 @@ sub new ($class, %option) {
 sub feed ($self, $bytes) {
     croak 'feed(): bytes must be a defined scalar'
         if !defined($bytes) || ref($bytes);
-    my $copy = "$bytes";
-    croak 'feed(): input must contain bytes'
-        if !utf8::downgrade($copy, 1);
-    $self->{input} .= $copy;
+
+    if (utf8::is_utf8($bytes)) {
+        my $copy = "$bytes";
+        croak 'feed(): input must contain bytes'
+            if !utf8::downgrade($copy, 1);
+        $self->{input} .= $copy;
+    } else {
+        $self->{input} .= $bytes;
+    }
     return $self;
 }
 
@@ -44,6 +49,12 @@ sub buffered_bytes ($self) {
 
 sub _check_size ($self, $high, $low) {
     my $max = $self->{max_frame_size};
+    if (!$high) {
+        die "WebSocket frame payload exceeds configured limit\n"
+            if $low > $max;
+        return $low;
+    }
+
     my $max_high = int($max / 4_294_967_296);
     my $max_low = $max % 4_294_967_296;
     if ($high > $max_high || ($high == $max_high && $low > $max_low)) {
@@ -53,10 +64,12 @@ sub _check_size ($self, $high, $low) {
 }
 
 sub next_frame ($self) {
-    my $input = $self->{input};
-    return undef if length($input) < 2;
+    return undef if length($self->{input}) < 2;
 
-    my ($first, $second) = unpack('CC', substr($input, 0, 2));
+    my ($first, $second) = unpack(
+        'CC',
+        substr($self->{input}, 0, 2),
+    );
     my $fin = $first & 0x80 ? 1 : 0;
     my $rsv = $first & 0x70;
     my $opcode = $first & 0x0f;
@@ -65,8 +78,9 @@ sub next_frame ($self) {
 
     die "WebSocket frame uses reserved bits without a negotiated extension\n"
         if $rsv;
+    my $type = Linux::Event::WebSocket::_Frame->type($opcode);
     die "WebSocket frame uses an unknown opcode $opcode\n"
-        if !defined Linux::Event::WebSocket::_Frame->type($opcode);
+        if !defined $type;
     die "WebSocket client frame is not masked\n"
         if $self->{endpoint_type} eq 'server' && !$masked;
     die "WebSocket server frame is masked\n"
@@ -83,15 +97,15 @@ sub next_frame ($self) {
         $length = $length_code;
         $self->_check_size(0, $length);
     } elsif ($length_code == 126) {
-        return undef if length($input) < $cursor + 2;
-        $length = unpack('n', substr($input, $cursor, 2));
+        return undef if length($self->{input}) < $cursor + 2;
+        $length = unpack('n', substr($self->{input}, $cursor, 2));
         $cursor += 2;
         die "WebSocket frame uses a non-minimal 16-bit payload length\n"
             if $length < 126;
         $self->_check_size(0, $length);
     } else {
-        return undef if length($input) < $cursor + 8;
-        my ($high, $low) = unpack('NN', substr($input, $cursor, 8));
+        return undef if length($self->{input}) < $cursor + 8;
+        my ($high, $low) = unpack('NN', substr($self->{input}, $cursor, 8));
         $cursor += 8;
         die "WebSocket frame 64-bit payload length has its most significant bit set\n"
             if $high & 0x80000000;
@@ -102,13 +116,13 @@ sub next_frame ($self) {
 
     my $mask = '';
     if ($masked) {
-        return undef if length($input) < $cursor + 4;
-        $mask = substr($input, $cursor, 4);
+        return undef if length($self->{input}) < $cursor + 4;
+        $mask = substr($self->{input}, $cursor, 4);
         $cursor += 4;
     }
 
-    return undef if length($input) < $cursor + $length;
-    my $payload = substr($input, $cursor, $length);
+    return undef if length($self->{input}) < $cursor + $length;
+    my $payload = substr($self->{input}, $cursor, $length);
     $payload = Linux::Event::WebSocket::_Frame->mask($payload, $mask)
         if $masked;
 
@@ -116,6 +130,7 @@ sub next_frame ($self) {
     return {
         fin     => $fin,
         opcode  => $opcode,
+        type    => $type,
         payload => $payload,
     };
 }

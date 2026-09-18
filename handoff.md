@@ -137,8 +137,25 @@ The mirror client comparison shows Linux::Event around 64-91% of Mojolicious
 depending on payload, with the smallest gap on larger binary messages.
 
 Standalone parser/masking rates are much higher than the public-stack rates, so
-the next performance target is profiling full per-message dispatch overhead,
+the remaining performance work is focused on full per-message dispatch overhead,
 not speculative XS.
+
+A first full client-path NYTProf run (GitHub Actions run 35407218947) confirmed
+that this overhead is distributed rather than concentrated in masking alone.
+For roughly 8k binary messages, validated WebSocket state lookup ran about 33k
+times, the weakened Engine connection was dereferenced about 25k times, and
+frame opcode-to-type lookup ran about 16k times. The 1 KiB text profile also
+showed the parser's local copy of its accumulated input becoming materially more
+expensive under coalesced traffic, and ASCII text was being validated/copied
+again on the echo send path.
+
+The current optimization pass therefore collapses repeated established-state
+lookups, caches the hot message callback at open time, caches the Engine
+connection while feeding a batch, keeps the parser on its owned input buffer
+instead of a copy-on-write local alias, reuses the parser's resolved frame type,
+adds a common short-length size-check fast path, and avoids redundant outbound
+ASCII validation. These are structural pure-Perl changes and must remain
+Autobahn-green before their performance result is accepted.
 
 The first timer-driven client benchmark also exposed a separate Linux::Event
 core fairness concern: under sustained external echo traffic, nominal

@@ -12,14 +12,14 @@ my $seconds = $ENV{BENCH_SECONDS} // 0.6;
 my @sizes = @ARGV ? @ARGV : (64, 1024, 16_384);
 my $batch = 64;
 
-sub measure ($name, $size, $code) {
+sub measure ($name, $size, $code, $operations = 1) {
     my $start = time;
     my $deadline = $start + $seconds;
     my $count = 0;
 
     while (1) {
         $code->() for 1 .. $batch;
-        $count += $batch;
+        $count += $batch * $operations;
         last if time >= $deadline;
     }
 
@@ -45,6 +45,8 @@ for my $size (@sizes) {
         masked => 1,
         mask_key => $fixed_mask,
     );
+    my $server_batch_wire = $server_wire x 32;
+    my $client_batch_wire = $client_wire x 32;
 
     my $server_parser = Linux::Event::WebSocket::_Parser->new(
         endpoint_type => 'server',
@@ -89,6 +91,22 @@ for my $size (@sizes) {
         my $frame = $client_parser->next_frame;
         die "parser failed to return server frame\n" if !$frame;
     });
+
+    measure('parse client batch32', $size, sub {
+        $server_parser->feed($client_batch_wire);
+        for (1 .. 32) {
+            my $frame = $server_parser->next_frame;
+            die "parser failed in client batch\n" if !$frame;
+        }
+    }, 32);
+
+    measure('parse server batch32', $size, sub {
+        $client_parser->feed($server_batch_wire);
+        for (1 .. 32) {
+            my $frame = $client_parser->next_frame;
+            die "parser failed in server batch\n" if !$frame;
+        }
+    }, 32);
 
     measure('validate ASCII UTF-8', $size, sub {
         Linux::Event::WebSocket::_UTF8->validate_bytes($payload);

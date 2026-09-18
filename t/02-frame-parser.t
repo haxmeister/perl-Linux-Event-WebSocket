@@ -38,7 +38,7 @@ my $server_parser = Linux::Event::WebSocket::_Parser->new(
 $server_parser->feed($masked_hello);
 is_deeply(
     $server_parser->next_frame,
-    { fin => 1, opcode => 1, payload => 'Hello' },
+    { fin => 1, opcode => 1, type => 'text', payload => 'Hello' },
     'server parser decodes a masked client frame',
 );
 is($server_parser->next_frame, undef, 'parser reports incomplete input');

@@ -97,12 +97,12 @@ sub _failure_code ($error) {
     return 1002;
 }
 
-sub _fail ($self, $error) {
+sub _fail ($self, $error, $connection = undef) {
     return if $self->{failed}++;
     my $message = "$error";
     $message =~ s/\s+\z//;
 
-    my $connection = $self->_connection;
+    $connection //= $self->_connection;
     $connection->_websocket_engine_error($message);
 
     if (!$self->{sent_close} && !$connection->is_closed) {
@@ -118,32 +118,32 @@ sub _fail ($self, $error) {
     return;
 }
 
-sub _deliver ($self, $type, $payload) {
+sub _deliver ($self, $type, $payload, $connection) {
     if ($type eq 'text') {
         my $decoded = eval { Linux::Event::WebSocket::_UTF8->decode($payload) };
         if ($@) {
-            $self->_fail('invalid UTF-8 in WebSocket text message');
+            $self->_fail('invalid UTF-8 in WebSocket text message', $connection);
             return 0;
         }
         $payload = $decoded;
     }
-    $self->_connection->_websocket_engine_message($payload, $type);
+    $connection->_websocket_engine_message($payload, $type);
     return 1;
 }
 
-sub _handle_data ($self, $frame, $type) {
+sub _handle_data ($self, $frame, $type, $connection) {
     return 0 if $self->{received_close};
     return 1 if $self->{sent_close};
 
     my $payload = $frame->{payload};
     if ($type eq 'continuation') {
         if (!defined $self->{fragment_type}) {
-            $self->_fail('WebSocket continuation frame received outside a fragmented message');
+            $self->_fail('WebSocket continuation frame received outside a fragmented message', $connection);
             return 0;
         }
         if (length($self->{fragment_payload}) + length($payload)
             > $self->{max_message_size}) {
-            $self->_fail('WebSocket message exceeds configured limit');
+            $self->_fail('WebSocket message exceeds configured limit', $connection);
             return 0;
         }
         $self->{fragment_payload} .= $payload;
@@ -152,29 +152,29 @@ sub _handle_data ($self, $frame, $type) {
             my $message = $self->{fragment_payload};
             $self->{fragment_type} = undef;
             $self->{fragment_payload} = '';
-            return $self->_deliver($message_type, $message);
+            return $self->_deliver($message_type, $message, $connection);
         }
         return 1;
     }
 
     if (defined $self->{fragment_type}) {
-        $self->_fail("WebSocket $type frame received while a fragmented message is unfinished");
+        $self->_fail("WebSocket $type frame received while a fragmented message is unfinished", $connection);
         return 0;
     }
     if (length($payload) > $self->{max_message_size}) {
-        $self->_fail('WebSocket message exceeds configured limit');
+        $self->_fail('WebSocket message exceeds configured limit', $connection);
         return 0;
     }
 
     if ($frame->{fin}) {
-        return $self->_deliver($type, $payload);
+        return $self->_deliver($type, $payload, $connection);
     }
     $self->{fragment_type} = $type;
     $self->{fragment_payload} = $payload;
     return 1;
 }
 
-sub _handle_close ($self, $payload) {
+sub _handle_close ($self, $payload, $connection) {
     my ($code, $reason);
     my $ok = eval {
         ($code, $reason) = Linux::Event::WebSocket::_Frame->parse_close_payload(
@@ -183,12 +183,11 @@ sub _handle_close ($self, $payload) {
         1;
     };
     if (!$ok) {
-        $self->_fail($@);
+        $self->_fail($@, $connection);
         return 0;
     }
 
     $self->{received_close} = 1;
-    my $connection = $self->_connection;
     if (!$self->{sent_close}) {
         $self->_write_frame('close', $payload);
         $self->{sent_close} = 1;
@@ -202,9 +201,10 @@ sub _handle_close ($self, $payload) {
     return 0;
 }
 
-sub _handle_frame ($self, $frame) {
-    my $type = Linux::Event::WebSocket::_Frame->type($frame->{opcode});
-    return $self->_handle_data($frame, $type) if $frame->{opcode} < 8;
+sub _handle_frame ($self, $frame, $connection) {
+    my $type = $frame->{type};
+    return $self->_handle_data($frame, $type, $connection)
+        if $frame->{opcode} < 8;
 
     if ($type eq 'ping') {
         $self->_write_frame('pong', $frame->{payload})
@@ -212,12 +212,13 @@ sub _handle_frame ($self, $frame) {
         return 1;
     }
     return 1 if $type eq 'pong';
-    return $self->_handle_close($frame->{payload});
+    return $self->_handle_close($frame->{payload}, $connection);
 }
 
 sub feed ($self, $bytes) {
+    my $connection = $self->_connection;
     return if $self->{failed} || $self->{received_close}
-        || $self->_connection->is_closed;
+        || $connection->is_closed;
 
     my $ok = eval {
         $self->{parser}->feed($bytes);
@@ -239,8 +240,8 @@ sub feed ($self, $bytes) {
             last;
         }
         last if !$frame;
-        last if !$self->_handle_frame($frame);
-        last if $self->_connection->is_closed;
+        last if !$self->_handle_frame($frame, $connection);
+        last if $connection->is_closed;
     }
     return;
 }

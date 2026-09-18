@@ -74,9 +74,11 @@ sub _ensure_websocket_open ($self) {
             Linux::Event::WebSocket::_Handshake->subprotocol($handshake);
     }
 
+    $state->{message_handler} = $state->{callbacks}{message}
+        // $self->can('websocket_message');
     $state->{open} = 1;
     $self->_dispatch_websocket('open');
-    return $self;
+    return $state;
 }
 
 sub _byte_payload ($operation, $payload) {
@@ -93,30 +95,30 @@ sub _byte_payload ($operation, $payload) {
 sub send_text ($self, $payload) {
     croak 'send_text(): payload must be a defined scalar'
         if !defined($payload) || ref($payload);
-    $self->_ensure_websocket_open;
+    my $state = $self->_ensure_websocket_open;
     croak 'send_text(): WebSocket connection is closing'
-        if $self->is_closing;
+        if $state->{closing};
 
     my $bytes = eval {
         Linux::Event::WebSocket::_UTF8->encode($payload);
     };
     croak 'send_text(): payload contains invalid UTF-8' if $@;
-    return $self->_websocket_state->{engine}->send_text($bytes);
+    return $state->{engine}->send_text($bytes);
 }
 
 sub send_binary ($self, $payload) {
-    $self->_ensure_websocket_open;
+    my $state = $self->_ensure_websocket_open;
     croak 'send_binary(): WebSocket connection is closing'
-        if $self->is_closing;
+        if $state->{closing};
     my $bytes = _byte_payload('send_binary', $payload);
-    return $self->_websocket_state->{engine}->send_binary($bytes);
+    return $state->{engine}->send_binary($bytes);
 }
 
 sub ping ($self, $payload = '') {
-    $self->_ensure_websocket_open;
-    croak 'ping(): WebSocket connection is closing' if $self->is_closing;
+    my $state = $self->_ensure_websocket_open;
+    croak 'ping(): WebSocket connection is closing' if $state->{closing};
     my $bytes = _byte_payload('ping', $payload);
-    return $self->_websocket_state->{engine}->ping($bytes);
+    return $state->{engine}->ping($bytes);
 }
 
 sub _cancel_close_timer ($self) {
@@ -195,7 +197,10 @@ sub _notify_websocket_close ($self, $code, $reason) {
 }
 
 sub _websocket_engine_message ($self, $payload, $type) {
-    $self->_dispatch_websocket('message', $payload, $type);
+    my $state = $self->SUPER::data;
+    if (my $handler = $state->{message_handler}) {
+        $handler->($self, $payload, $type);
+    }
     return;
 }
 
@@ -215,8 +220,8 @@ sub _websocket_engine_close ($self, $code, $reason) {
 }
 
 sub on_data ($self, $bytes) {
-    $self->_ensure_websocket_open;
-    $self->_websocket_state->{engine}->feed($bytes);
+    my $state = $self->_ensure_websocket_open;
+    $state->{engine}->feed($bytes);
     return;
 }
 
