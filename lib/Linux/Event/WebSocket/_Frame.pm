@@ -4,10 +4,10 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Encode qw(decode FB_CROAK);
 use utf8 ();
 
 use Linux::Event::WebSocket::_Random;
+use Linux::Event::WebSocket::_UTF8;
 
 my %OPCODE = (
     continuation => 0,
@@ -131,8 +131,7 @@ sub close_payload ($class, $code, $reason = '') {
     croak 'close reason must contain UTF-8 bytes'
         if !utf8::downgrade($bytes, 1);
     croak 'close reason exceeds 123 bytes' if length($bytes) > 123;
-    my $copy = $bytes;
-    eval { decode('UTF-8', $copy, FB_CROAK); 1 }
+    eval { Linux::Event::WebSocket::_UTF8->validate_bytes($bytes); 1 }
         or croak 'close reason contains invalid UTF-8';
     return pack('n', $number) . $bytes;
 }
@@ -145,8 +144,7 @@ sub parse_close_payload ($class, $payload) {
     my ($code, $reason) = unpack('na*', $payload);
     die "WebSocket close frame contains invalid status code $code\n"
         if !$class->valid_close_code($code);
-    my $copy = $reason;
-    eval { decode('UTF-8', $copy, FB_CROAK); 1 }
+    eval { Linux::Event::WebSocket::_UTF8->validate_bytes($reason); 1 }
         or die "WebSocket close frame contains invalid UTF-8 reason\n";
     return ($code, $reason);
 }

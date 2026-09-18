@@ -3,7 +3,6 @@ use strict;
 use warnings;
 
 use JSON::PP qw(decode_json);
-use Path::Tiny ();
 
 my $file = shift @ARGV // 'xt/autobahn/reports/servers/index.json';
 open my $fh, '<', $file or die "cannot open Autobahn report $file: $!\n";

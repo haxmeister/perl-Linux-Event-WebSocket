@@ -6,6 +6,8 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/autobahn.yml'
+      - 'Makefile.PL'
+      - 'lib/Linux/Event/WebSocket/**'
       - 'xt/autobahn/**'
 
 concurrency:

@@ -4,11 +4,11 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Encode qw(decode FB_CROAK);
 use Scalar::Util qw(blessed weaken);
 
 use Linux::Event::WebSocket::_Frame;
 use Linux::Event::WebSocket::_Parser;
+use Linux::Event::WebSocket::_UTF8;
 
 sub new ($class, %option) {
     my $connection = delete $option{connection};
@@ -120,7 +120,7 @@ sub _fail ($self, $error) {
 
 sub _deliver ($self, $type, $payload) {
     if ($type eq 'text') {
-        my $decoded = eval { decode('UTF-8', $payload, FB_CROAK) };
+        my $decoded = eval { Linux::Event::WebSocket::_UTF8->decode($payload) };
         if ($@) {
             $self->_fail('invalid UTF-8 in WebSocket text message');
             return 0;
@@ -196,7 +196,7 @@ sub _handle_close ($self, $payload) {
     $connection->_websocket_engine_closing;
 
     my $decoded = '';
-    $decoded = decode('UTF-8', $reason, FB_CROAK) if length $reason;
+    $decoded = Linux::Event::WebSocket::_UTF8->decode($reason) if length $reason;
     $connection->_websocket_engine_close($code, $decoded);
     $connection->end if !$connection->is_write_ended;
     return 0;

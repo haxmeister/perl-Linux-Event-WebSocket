@@ -6,7 +6,6 @@ use warnings;
 use parent 'Linux::Event::IO::Sock::Stream';
 
 use Carp qw(croak);
-use Encode qw(decode encode FB_CROAK);
 use Scalar::Util qw(blessed);
 use utf8 ();
 
@@ -14,6 +13,7 @@ use Linux::Event::Kernel::Timer;
 use Linux::Event::WebSocket::_Engine;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
+use Linux::Event::WebSocket::_UTF8;
 
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;
@@ -97,14 +97,10 @@ sub send_text ($self, $payload) {
     croak 'send_text(): WebSocket connection is closing'
         if $self->is_closing;
 
-    my $bytes;
-    if (utf8::is_utf8($payload)) {
-        $bytes = encode('UTF-8', $payload, FB_CROAK);
-    } else {
-        $bytes = "$payload";
-        my $check = $bytes;
-        decode('UTF-8', $check, FB_CROAK);
-    }
+    my $bytes = eval {
+        Linux::Event::WebSocket::_UTF8->encode($payload);
+    };
+    croak 'send_text(): payload contains invalid UTF-8' if $@;
     return $self->_websocket_state->{engine}->send_text($bytes);
 }
 
@@ -171,9 +167,10 @@ sub close ($self, %option) {
     my $reason_bytes = '';
     if (defined $reason) {
         croak 'close(): reason must be a scalar' if ref $reason;
-        $reason_bytes = utf8::is_utf8($reason)
-            ? encode('UTF-8', $reason, FB_CROAK)
-            : "$reason";
+        $reason_bytes = eval {
+            Linux::Event::WebSocket::_UTF8->encode($reason);
+        };
+        croak 'close(): reason contains invalid UTF-8' if $@;
     }
 
     $state->{engine}->start_close($code, $reason_bytes);
