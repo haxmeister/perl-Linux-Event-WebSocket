@@ -49,7 +49,9 @@ my $measuring = 0;
 my $stopping = 0;
 my $start;
 my $elapsed;
-my ($warmup_timer, $measure_timer, $guard);
+my $warmup_deadline;
+my $measure_deadline;
+my $guard;
 
 sub send_one ($ws) {
     if ($type eq 'text') {
@@ -72,24 +74,7 @@ sub finish () {
 
 sub start_measurement () {
     send_one($_) for map { ($_) x $window } @connection;
-
-    $warmup_timer = Linux::Event::Kernel::Timer->new(
-        loop => $loop,
-        after => $warmup,
-        on_timer => sub ($timer) {
-            $count = 0;
-            $start = time;
-            $measuring = 1;
-
-            $measure_timer = Linux::Event::Kernel::Timer->new(
-                loop => $loop,
-                after => $seconds,
-                on_timer => sub ($measure) {
-                    finish();
-                },
-            );
-        },
-    );
+    $warmup_deadline = time + $warmup;
     return;
 }
 
@@ -117,7 +102,24 @@ for my $id (1 .. $clients) {
                 if $message_type ne $type;
             die "message size mismatch\n"
                 if length($message) != $bytes;
-            ++$count if $measuring;
+
+            my $now = time;
+            if (!$measuring && defined($warmup_deadline)
+                && $now >= $warmup_deadline) {
+                $count = 0;
+                $start = $now;
+                $measure_deadline = $start + $seconds;
+                $measuring = 1;
+            }
+
+            if ($measuring) {
+                ++$count;
+                if ($now >= $measure_deadline) {
+                    finish();
+                    return;
+                }
+            }
+
             send_one($ws);
         },
 
