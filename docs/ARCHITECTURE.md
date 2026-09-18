@@ -138,7 +138,8 @@ The suite covers handshake vectors and failures, incremental frame parsing at
 every byte boundary, masking direction, length encodings, fragmentation,
 message-size limits, UTF-8 failures, ping/pong, close validation, same-read HTTP
 handoff, object identity, subprotocols, text and binary messages, graceful
-close, and local TLS client/server operation.
+close, abrupt transport loss, simultaneous close, peer loss during local close,
+and local TLS client/server operation.
 
 CI targets Perl 5.36 and Perl 5.44.
 

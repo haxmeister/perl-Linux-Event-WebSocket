@@ -78,13 +78,15 @@ t/10-client-server.t
 t/11-message-types.t
 t/12-upgrade-tail.t
 t/13-core-close-boundary.t
+t/14-close-lifecycle.t
 t/20-tls-client-server.t
 ```
 
 Coverage includes deterministic RFC handshake vectors, incremental parsing,
 masking and length policy, fragmentation, control frames, close errors, size
 limits, production HTTP handoff, same-read Upgrade tails, object identity,
-subprotocols, TLS, and the Linux::Event protocol-subclass close boundary.
+subprotocols, TLS, the Linux::Event protocol-subclass close boundary, abrupt
+transport loss, simultaneous close, and peer loss during local close.
 
 CI targets Perl 5.36 and Perl 5.44.
 
@@ -100,10 +102,9 @@ This distribution now requires Linux::Event 0.115 or newer.
 ## Remaining release work
 
 1. Test against an independent peer and the Autobahn WebSocket test suite.
-2. Add adverse close-race and abrupt-EOF integration coverage.
-3. Benchmark only after correctness and the API are stable; add native code only
+2. Benchmark only after correctness and the API are stable; add native code only
    for a measured bottleneck.
-4. Perform a release-readiness review before the first CPAN upload.
+3. Perform a release-readiness review before the first CPAN upload.
 
 ## Files to read first
 
@@ -116,5 +117,6 @@ lib/Linux/Event/WebSocket/_Engine.pm
 t/10-client-server.t
 t/12-upgrade-tail.t
 t/13-core-close-boundary.t
+t/14-close-lifecycle.t
 t/20-tls-client-server.t
 ```
