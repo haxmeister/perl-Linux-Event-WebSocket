@@ -59,6 +59,11 @@ jobs:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/protocol.pl | tee benchmark-protocol.txt
 
+      - name: Pure-Perl optimization candidates
+        env:
+          BENCH_SECONDS: '0.6'
+        run: perl -Iblib/lib bench/candidates.pl | tee benchmark-candidates.txt
+
       - name: Public API echo benchmark
         shell: bash
         run: |
@@ -87,4 +92,5 @@ jobs:
           path: |
             benchmark-environment.txt
             benchmark-protocol.txt
+            benchmark-candidates.txt
             benchmark-echo.txt

@@ -24,3 +24,8 @@ GitHub Actions provides repeatable regression samples, but hosted-runner numbers
 should not be treated as absolute hardware-independent performance claims.
 Local measurements on a stable machine are preferred before making native-code
 decisions.
+
+`candidates.pl` is intentionally separate from production code. It measures
+candidate pure-Perl fixes for bottlenecks identified by the baseline before any
+implementation is changed. A candidate must also pass its RFC validity vectors
+before its performance result is printed.
