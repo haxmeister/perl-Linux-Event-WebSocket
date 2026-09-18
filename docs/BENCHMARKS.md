@@ -90,3 +90,73 @@ Native code should be reconsidered only after a future stable benchmark shows a
 remaining protocol-layer bottleneck that is material in end-to-end workloads.
 Masking or parsing are plausible future candidates, but neither is currently a
 reason to add C/XS maintenance burden.
+
+## Cross-implementation comparison
+
+A repository-only comparison harness under `bench/compare/` runs minimal echo
+servers and clients for:
+
+- Linux::Event::WebSocket;
+- Mojolicious 9.49;
+- Node.js `ws` 8.21.3 with `bufferutil` 4.1.0;
+- Go `gorilla/websocket` 1.5.3.
+
+The server comparison uses one common Node `ws` load generator. The client
+comparison uses one common Node `ws` echo server. Compression is disabled.
+On runners with at least two CPUs, the implementation under test is pinned to
+CPU 0 and the driver/peer to CPU 1. Go is constrained to `GOMAXPROCS=1`.
+Each case warms up for 0.5 seconds and measures for 1.5 seconds after the
+WebSocket handshake.
+
+A representative same-run server comparison on an AMD EPYC runner measured:
+
+| case | Linux::Event | Mojolicious | Node ws | Gorilla |
+| --- | ---: | ---: | ---: | ---: |
+| binary 64 B, 1 conn | 32.9k | 38.4k | 146.6k | 166.1k |
+| binary 1 KiB, 1 conn | 30.7k | 35.3k | 132.6k | 142.3k |
+| binary 16 KiB, 1 conn | 21.1k | 17.1k | 61.3k | 39.3k |
+| binary 64 B, 100 conn | 32.5k | 32.1k | 139.2k | 145.0k |
+| text 64 B, 1 conn | 29.3k | 34.9k | 139.2k | 153.5k |
+| text 1 KiB, 1 conn | 25.8k | 31.3k | 124.1k | 126.5k |
+| text 16 KiB, 1 conn | 10.5k | 13.4k | 33.1k | 35.5k |
+| text 64 B, 100 conn | 28.9k | 29.7k | 127.2k | 130.5k |
+
+The mirror client comparison on the same runner measured:
+
+| case | Linux::Event | Mojolicious | Node ws | Gorilla |
+| --- | ---: | ---: | ---: | ---: |
+| binary 64 B, 1 conn | 29.9k | 42.8k | 151.1k | 160.2k |
+| binary 1 KiB, 1 conn | 28.1k | 39.7k | 137.2k | 135.6k |
+| binary 16 KiB, 1 conn | 20.7k | 22.7k | 58.1k | 25.6k |
+| binary 64 B, 100 conn | 29.3k | 38.3k | 138.6k | 144.1k |
+| text 64 B, 1 conn | 27.1k | 40.0k | 138.8k | 156.2k |
+| text 1 KiB, 1 conn | 24.3k | 36.7k | 124.9k | 136.4k |
+| text 16 KiB, 1 conn | 12.7k | 19.8k | 33.4k | 21.9k |
+| text 64 B, 100 conn | 26.6k | 36.0k | 127.9k | 140.8k |
+
+The comparison shows that Linux::Event::WebSocket is close to Mojolicious for
+server-side concurrency and exceeds it for the representative 16 KiB binary
+server case, while Mojolicious retains a moderate advantage on most small and
+medium messages. The native-heavy Node and Go implementations remain several
+times faster on small-message workloads.
+
+The client comparison shows a larger Perl-to-Perl gap: Linux::Event is commonly
+about 64-91% of Mojolicious throughput depending on payload, with the closest
+result again on larger binary messages.
+
+These results do not point to masking or standalone parsing as the dominant
+remaining cost. The private parser/masking microbenchmarks are much faster than
+the public end-to-end rates. The next useful performance investigation is
+therefore profiling the complete parser -> engine -> connection -> callback
+dispatch path rather than adding WebSocket-specific XS speculatively.
+
+## Timer-fairness observation
+
+The first version of the external client comparison used Linux::Event timers to
+end each measurement interval. Under sustained external echo traffic, nominal
+1.5-second timers were delayed by tens of seconds. A wall-clock cutoff checked
+from the message path produced stable 1.5-second measurements.
+
+That behavior is not attributed to Linux::Event::WebSocket itself. It is a
+separate Linux::Event core scheduling/fairness follow-up and should be
+investigated in the core repository only with explicit authorization.

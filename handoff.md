@@ -121,8 +121,32 @@ Representative hosted-runner results improved 1 KiB text echo from roughly
 1.4k to 14.7k msg/s and 16 KiB text echo from roughly 97 to 5.7k msg/s.
 Normal CI and Autobahn client/server conformance remain green.
 
-See `docs/BENCHMARKS.md`. Current measurements do not justify
-WebSocket-specific XS.
+See `docs/BENCHMARKS.md`.
+
+Cross-implementation server and client benchmarks are now complete against
+Mojolicious 9.49, Node `ws` 8.21.3 + `bufferutil`, and Go
+`gorilla/websocket` 1.5.3 using common peers and same-run CPU isolation.
+
+Representative server results put Linux::Event close to Mojolicious under
+64-byte 100-connection load (32.5k vs 32.1k binary; 28.9k vs 29.7k text) and
+ahead of Mojolicious for 16 KiB binary (21.1k vs 17.1k). Mojolicious is still
+moderately faster on most small/medium single-connection cases. Node and Go are
+several times faster on small-message workloads.
+
+The mirror client comparison shows Linux::Event around 64-91% of Mojolicious
+depending on payload, with the smallest gap on larger binary messages.
+
+Standalone parser/masking rates are much higher than the public-stack rates, so
+the next performance target is profiling full per-message dispatch overhead,
+not speculative XS.
+
+The first timer-driven client benchmark also exposed a separate Linux::Event
+core fairness concern: under sustained external echo traffic, nominal
+1.5-second timers were delayed by tens of seconds. The benchmark now uses a
+wall-clock cutoff so results are valid. Do not modify core for this without
+explicit user authorization.
+
+Current measurements still do not justify WebSocket-specific XS by themselves.
 
 ## Resolved core close boundary
 
@@ -135,7 +159,12 @@ This distribution now requires Linux::Event 0.115 or newer.
 
 ## Remaining release work
 
-1. Perform a release-readiness review before the first CPAN upload.
+1. Decide whether to profile and reduce the remaining full-stack per-message
+   overhead before release, especially the client path.
+2. Perform a release-readiness review before the first CPAN upload.
+
+Separate core follow-up, not authorized in this project: investigate timer
+fairness under continuously ready external I/O.
 
 ## Files to read first
 
