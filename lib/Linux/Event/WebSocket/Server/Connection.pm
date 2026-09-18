@@ -5,6 +5,17 @@ use warnings;
 
 use parent 'Linux::Event::WebSocket::Connection';
 
+# Linux::Event::HTTP keeps its constructor-installed transport-close wrapper
+# across transition_to(). That wrapper performs one final HTTP state cleanup
+# before forwarding to the WebSocket close lifecycle, so preserve its private
+# cleanup entry point on the transitioned object without duplicating HTTP state
+# knowledge here.
+sub _clear_transaction ($self) {
+    require Linux::Event::HTTP::Server::Connection;
+    Linux::Event::HTTP::Server::Connection::_clear_transaction($self);
+    return;
+}
+
 1;
 
 __END__
