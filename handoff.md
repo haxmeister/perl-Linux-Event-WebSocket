@@ -157,11 +157,30 @@ The inherited Stream `close()` collision has been resolved in Linux::Event
 This distribution now requires Linux::Event 0.115 or newer.
 `t/13-core-close-boundary.t` verifies the WebSocket side of that contract.
 
-## Remaining release work
+## Current decision and remaining release work
 
-1. Decide whether to profile and reduce the remaining full-stack per-message
-   overhead before release, especially the client path.
-2. Perform a release-readiness review before the first CPAN upload.
+Do **not** proceed to release-readiness yet. The user considers Mojolicious a
+low-performance Perl baseline and requires Linux::Event::WebSocket to
+**decisively outperform it** on the common small/medium-message paths before
+the first release.
+
+Next task:
+
+1. Profile the complete per-message hot path, especially the client path:
+   Stream -> on_data -> state lookup -> engine -> parser -> engine dispatch ->
+   connection dispatch -> application callback -> send.
+2. Remove avoidable Perl-layer dispatch/state/call overhead and rerun the
+   same cross-implementation benchmark after each meaningful change.
+3. Prefer pure-Perl structural wins first. Add WebSocket-specific XS only when
+   profiling identifies a measured bottleneck that cannot be removed cleanly
+   in Perl.
+4. Preserve the current Autobahn-green behavior while optimizing.
+5. Only after Linux::Event::WebSocket clearly passes Mojolicious on the target
+   benchmark matrix should the release-readiness review begin.
+
+Important baseline: server performance is already close to or ahead of
+Mojolicious in some cases, but the client path remains the clearest deficit
+(roughly 64-91% of Mojolicious depending on payload).
 
 Separate core follow-up, not authorized in this project: investigate timer
 fairness under continuously ready external I/O.
