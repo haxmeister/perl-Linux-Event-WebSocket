@@ -107,10 +107,20 @@ sub schedule_next () {
                 },
 
                 on_error => sub ($connection, $error) {
-                    if ($phase ne 'case') {
+                    if ($phase eq 'count') {
                         return finish_failure(
-                            "Autobahn control connection failed: $error"
+                            "Autobahn case-count connection failed: $error"
                         );
+                    }
+
+                    if ($phase eq 'report') {
+                        # The fuzzing server may reset the final report-control
+                        # connection after writing index.json. The workflow
+                        # verifies the report file and its contents next.
+                        return if $advanced++;
+                        $guard->cancel;
+                        $loop->stop;
+                        return;
                     }
 
                     # Protocol-error cases intentionally make the client report
