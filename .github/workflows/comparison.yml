@@ -59,6 +59,7 @@ jobs:
             cd bench/compare/go
             go get github.com/gorilla/websocket@v1.5.3
             go build -o /tmp/gorilla-websocket-bench .
+            go build -o /tmp/gorilla-websocket-client-bench ./client
           )
 
       - name: Build Linux::Event::WebSocket
@@ -93,8 +94,16 @@ jobs:
       - name: Run comparison
         run: bash bench/compare/run-comparison.sh comparison.csv
 
+      - name: Run client comparison
+        run: bash bench/compare/run-client-comparison.sh client-comparison.csv
+
       - name: Show results
-        run: cat comparison.csv
+        run: |
+          echo "Server comparison"
+          cat comparison.csv
+          echo
+          echo "Client comparison"
+          cat client-comparison.csv
 
       - name: Upload comparison
         uses: actions/upload-artifact@v4
@@ -102,4 +111,5 @@ jobs:
           name: websocket-implementation-comparison
           path: |
             comparison.csv
+            client-comparison.csv
             comparison-environment.txt

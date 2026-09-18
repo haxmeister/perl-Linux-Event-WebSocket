@@ -31,3 +31,13 @@ to consume extra cores.
 The GitHub workflow records exact runtime and library versions together with
 the CSV result. Hosted-runner results are useful for relative comparison within
 one run, not as universal hardware-independent throughput claims.
+
+A second matrix compares **clients** against one common Node `ws` echo server.
+The same four implementations are used as clients, with the same message sizes,
+connection counts, window sizes, warmup, CPU isolation, and disabled
+compression. The Go client is also constrained to `GOMAXPROCS=1`.
+
+The server comparison answers "how fast does each server process identical
+wire traffic from the same client?" The client comparison answers the mirror
+question against one identical server. Keeping these as separate CSV files
+avoids conflating client and server costs.
