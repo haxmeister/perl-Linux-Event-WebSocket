@@ -25,10 +25,11 @@ WriteMakefile(
         },
     },
     PREREQ_PM => {
+        'Digest::SHA'         => 0,
         'Encode'              => 0,
         'Linux::Event'        => '0.114',
         'Linux::Event::HTTP'  => '0.001',
-        'Net::WebSocket'      => '0.24',
+        'MIME::Base64'        => 0,
         'URI'                 => 0,
     },
     TEST_REQUIRES => {

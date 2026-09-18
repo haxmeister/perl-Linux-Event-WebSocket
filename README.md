@@ -11,7 +11,7 @@ The distribution now has working `ws://` and `wss://` client/server paths and a
 real production test suite. It has not yet been released to CPAN and the public
 API is still allowed to change before the first release.
 
-Current GitHub Actions coverage passes on Perl 5.36 and Perl 5.44.0.
+The GitHub Actions test matrix targets Perl 5.36 and Perl 5.44.0.
 
 ## What works today
 
@@ -20,7 +20,7 @@ Current GitHub Actions coverage passes on Perl 5.36 and Perl 5.44.0.
 - Text and binary messages.
 - UTF-8 validation and decoding for text messages.
 - Client masking and server unmasked output.
-- Fragmented WebSocket messages through `Net::WebSocket`.
+- Fragmented WebSocket messages with interleaved control frames.
 - Automatic ping/pong control handling plus explicit `ping()`.
 - Graceful WebSocket close handshake with a configurable close timeout.
 - Hard transport abort when graceful close is not appropriate.
@@ -134,10 +134,8 @@ Linux::Event::HTTP
     HTTP/1.1 opening Upgrade and live-stream handoff
         |
 Linux::Event::WebSocket
-    WebSocket connection API and protocol policy
-        |
-Net::WebSocket
-    RFC 6455 frames, messages, fragmentation, masking, control semantics
+    WebSocket connection API, RFC 6455 framing, messages, masking,
+    fragmentation, control semantics, and protocol policy
 ```
 
 A successful HTTP Upgrade calls Linux::Event's in-place `transition_to()` on the
@@ -167,23 +165,12 @@ Linux::Event::WebSocket::Server::Connection
 There are no Perl roles, mixins, multiple-inheritance trees, or method injection
 in the connection design.
 
-## Net::WebSocket status
+## Protocol engine
 
-`Net::WebSocket` is currently the RFC 6455 engine and is kept behind private
-adapter classes so it can be replaced without changing the public API.
-
-Released `Net::WebSocket` 0.24 has a test-only Perl 5.44 compatibility problem:
-a warning produced by a backslash inside a `qw()` list is promoted to a test
-failure by `Test::FailWarnings`. A one-line patch is stored in:
-
-```text
-contrib/Net-WebSocket-0.24-perl-5.44.patch
-```
-
-The patched upstream suite passes on both Perl 5.36 and Perl 5.44.0. An upstream
-issue has been filed. Development CI applies the patch while waiting for an
-upstream response. This is not intended to become a force-install or `--notest`
-requirement for users.
+The RFC 6455 engine is implemented by private modules in this distribution.
+It incrementally parses frames, enforces endpoint masking rules, reassembles
+fragmented messages, validates UTF-8, and handles control and close frames.
+Client handshake keys and frame masks come from `/dev/urandom`.
 
 ## Protocol policy
 

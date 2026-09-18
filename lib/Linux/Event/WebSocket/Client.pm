@@ -370,8 +370,9 @@ Linux::Event::WebSocket::Client - callback-first WebSocket client
 
 The Client uses Linux::Event::HTTP only for the opening HTTP/1.1 Upgrade. The
 same live connection object is then transitioned in place to
-L<Linux::Event::WebSocket::Client::Connection>. Net::WebSocket validates the
-WebSocket-specific response fields, including C<Sec-WebSocket-Accept>.
+L<Linux::Event::WebSocket::Client::Connection>. The private handshake engine
+validates WebSocket-specific response fields, including
+C<Sec-WebSocket-Accept>.
 
 C<connect> returns the live connection reference immediately. During the
 opening handshake its class is private HTTP machinery; after a successful

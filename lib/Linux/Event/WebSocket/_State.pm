@@ -25,13 +25,6 @@ sub new ($class, %option) {
         if !defined($close_timeout) || ref($close_timeout)
         || $close_timeout !~ /\A(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)\z/;
 
-    my $max_frame_size = delete $option{max_frame_size};
-    croak 'new(): max_frame_size must be a positive integer'
-        if defined($max_frame_size)
-        && (ref($max_frame_size)
-            || "$max_frame_size" !~ /\A[0-9]+\z/
-            || $max_frame_size < 1);
-
     my $max_message_size = delete $option{max_message_size};
     croak 'new(): max_message_size must be a positive integer'
         if defined($max_message_size)
@@ -50,16 +43,12 @@ sub new ($class, %option) {
         secure          => delete($option{secure}) ? 1 : 0,
         url             => delete $option{url},
         close_timeout   => 0 + $close_timeout,
-        max_frame_size  => $max_frame_size,
         max_message_size => $max_message_size,
-        io              => undef,
-        parser          => undef,
-        endpoint        => undef,
+        engine          => undef,
         open            => 0,
         closing         => 0,
         close_notified  => 0,
         close_timer     => undef,
-        fragment_bytes  => 0,
     }, $class;
 
     croak 'new(): unknown option(s): ' . join(', ', sort keys %option)

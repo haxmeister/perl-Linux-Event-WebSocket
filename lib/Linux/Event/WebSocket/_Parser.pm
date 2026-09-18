@@ -3,90 +3,121 @@ use v5.36;
 use strict;
 use warnings;
 
-use parent 'Net::WebSocket::Parser';
-
 use Carp qw(croak);
-use Encode qw(decode FB_CROAK);
+use utf8 ();
 
-sub new ($class, $reader, %option) {
+use Linux::Event::WebSocket::_Frame;
+
+sub new ($class, %option) {
     my $endpoint_type = delete $option{endpoint_type};
     croak 'new(): endpoint_type must be client or server'
         if !defined($endpoint_type)
         || ($endpoint_type ne 'client' && $endpoint_type ne 'server');
+
+    my $max_frame_size = delete $option{max_frame_size};
+    croak 'new(): max_frame_size must be a positive integer'
+        if !defined($max_frame_size) || ref($max_frame_size)
+        || "$max_frame_size" !~ /\A[0-9]+\z/ || $max_frame_size < 1;
     croak 'new(): unknown option(s): ' . join(', ', sort keys %option)
         if %option;
 
-    my $self = $class->SUPER::new($reader);
-    $self->{_lews_endpoint_type} = $endpoint_type;
+    return bless {
+        endpoint_type  => $endpoint_type,
+        max_frame_size => 0 + $max_frame_size,
+        input          => '',
+    }, $class;
+}
+
+sub feed ($self, $bytes) {
+    croak 'feed(): bytes must be a defined scalar'
+        if !defined($bytes) || ref($bytes);
+    my $copy = "$bytes";
+    croak 'feed(): input must contain bytes'
+        if !utf8::downgrade($copy, 1);
+    $self->{input} .= $copy;
     return $self;
 }
 
-sub _valid_close_code ($code) {
-    return 0 if $code < 1000 || $code >= 5000;
-    return 0 if $code == 1004 || $code == 1005 || $code == 1006;
-    return 0 if $code == 1015;
-    return 1;
+sub buffered_bytes ($self) {
+    return length $self->{input};
 }
 
-sub _validate_close_frame ($frame) {
-    my $payload = $frame->get_payload;
-    my $length = length $payload;
-    die "WebSocket close frame has a one-byte payload\n" if $length == 1;
-    return if !$length;
-
-    my ($code, $reason) = unpack 'na*', $payload;
-    die "WebSocket close frame contains invalid status code $code\n"
-        if !_valid_close_code($code);
-
-    if (length $reason) {
-        my $check = $reason;
-        my $ok = eval {
-            decode('UTF-8', $check, FB_CROAK);
-            1;
-        };
-        die "WebSocket close frame contains invalid UTF-8 reason\n" if !$ok;
+sub _check_size ($self, $high, $low) {
+    my $max = $self->{max_frame_size};
+    my $max_high = int($max / 4_294_967_296);
+    my $max_low = $max % 4_294_967_296;
+    if ($high > $max_high || ($high == $max_high && $low > $max_low)) {
+        die "WebSocket frame payload exceeds configured limit\n";
     }
-    return;
+    return $high * 4_294_967_296 + $low;
 }
 
-sub _validate_peer_frame ($self, $frame) {
-    my $endpoint_type = $self->{_lews_endpoint_type};
-    my $masked = length($frame->get_mask_bytes) ? 1 : 0;
+sub next_frame ($self) {
+    my $input = $self->{input};
+    return undef if length($input) < 2;
 
-    if ($endpoint_type eq 'server' && !$masked) {
-        die "WebSocket client frame is not masked\n";
-    }
-    if ($endpoint_type eq 'client' && $masked) {
-        die "WebSocket server frame is masked\n";
-    }
+    my ($first, $second) = unpack('CC', substr($input, 0, 2));
+    my $fin = $first & 0x80 ? 1 : 0;
+    my $rsv = $first & 0x70;
+    my $opcode = $first & 0x0f;
+    my $masked = $second & 0x80 ? 1 : 0;
+    my $length_code = $second & 0x7f;
 
     die "WebSocket frame uses reserved bits without a negotiated extension\n"
-        if $frame->get_rsv;
+        if $rsv;
+    die "WebSocket frame uses an unknown opcode $opcode\n"
+        if !defined Linux::Event::WebSocket::_Frame->type($opcode);
+    die "WebSocket client frame is not masked\n"
+        if $self->{endpoint_type} eq 'server' && !$masked;
+    die "WebSocket server frame is masked\n"
+        if $self->{endpoint_type} eq 'client' && $masked;
 
-    if ($frame->is_control) {
-        # Parsed control-frame classes expose get_fin() as a constant, so use
-        # their documented wire serialization to verify the actual received
-        # FIN bit before Endpoint handles the control frame.
-        my $wire = $frame->to_bytes;
-        die "WebSocket control frame is fragmented\n"
-            if !(ord(substr($wire, 0, 1)) & 0x80);
+    my $control = $opcode >= 8;
+    die "WebSocket control frame is fragmented\n" if $control && !$fin;
+    die "WebSocket control frame payload exceeds 125 bytes\n"
+        if $control && $length_code > 125;
 
-        my $payload_length = length $frame->get_payload;
-        die "WebSocket control frame payload exceeds 125 bytes\n"
-            if $payload_length > 125;
-
-        _validate_close_frame($frame) if $frame->get_type eq 'close';
+    my $cursor = 2;
+    my $length;
+    if ($length_code < 126) {
+        $length = $length_code;
+        $self->_check_size(0, $length);
+    } elsif ($length_code == 126) {
+        return undef if length($input) < $cursor + 2;
+        $length = unpack('n', substr($input, $cursor, 2));
+        $cursor += 2;
+        die "WebSocket frame uses a non-minimal 16-bit payload length\n"
+            if $length < 126;
+        $self->_check_size(0, $length);
+    } else {
+        return undef if length($input) < $cursor + 8;
+        my ($high, $low) = unpack('NN', substr($input, $cursor, 8));
+        $cursor += 8;
+        die "WebSocket frame 64-bit payload length has its most significant bit set\n"
+            if $high & 0x80000000;
+        die "WebSocket frame uses a non-minimal 64-bit payload length\n"
+            if $high == 0 && $low < 65_536;
+        $length = $self->_check_size($high, $low);
     }
 
-    return;
-}
+    my $mask = '';
+    if ($masked) {
+        return undef if length($input) < $cursor + 4;
+        $mask = substr($input, $cursor, 4);
+        $cursor += 4;
+    }
 
-sub get_next_frame ($self) {
-    my $frame = $self->SUPER::get_next_frame;
-    return $frame if !ref $frame;
+    return undef if length($input) < $cursor + $length;
+    my $payload = substr($input, $cursor, $length);
+    $payload = Linux::Event::WebSocket::_Frame->mask($payload, $mask)
+        if $masked;
 
-    $self->_validate_peer_frame($frame);
-    return $frame;
+    substr($self->{input}, 0, $cursor + $length, '');
+    return {
+        fin     => $fin,
+        opcode  => $opcode,
+        payload => $payload,
+    };
 }
 
 1;

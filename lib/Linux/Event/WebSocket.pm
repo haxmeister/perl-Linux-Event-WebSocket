@@ -25,11 +25,11 @@ support on top of Linux::Event.
 
 Linux::Event owns the live socket, TLS transport, ordered byte buffering,
 backpressure, and protocol transition. Linux::Event::HTTP owns the opening
-HTTP/1.1 Upgrade exchange. Net::WebSocket owns RFC 6455 frame, message, masking,
-fragmentation, and control-frame semantics.
+HTTP/1.1 Upgrade exchange. Private modules in this distribution own RFC 6455
+handshake validation, framing, masking, fragmentation, and control semantics.
 
-The WebSocket protocol engine is intentionally kept behind private adapter
-classes so it can be replaced without changing the public Linux::Event API.
+The WebSocket protocol engine is intentionally kept behind private classes so
+it can evolve without changing the public Linux::Event API.
 
 =head1 STATUS
 

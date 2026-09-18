@@ -31,14 +31,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install patched Net::WebSocket
-        run: |
-          git clone --depth 1 https://github.com/FGasper/p5-Net-WebSocket.git /tmp/p5-Net-WebSocket
-          if grep -Fq ': \ " /' /tmp/p5-Net-WebSocket/t/Net-WebSocket-HTTP.t; then
-            patch -d /tmp/p5-Net-WebSocket -p1 < contrib/Net-WebSocket-0.24-perl-5.44.patch
-          fi
-          cpanm --notest /tmp/p5-Net-WebSocket
-
       - name: Install Linux::Event dependencies
         run: |
           git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
@@ -56,6 +48,3 @@ jobs:
 
       - name: Run production tests
         run: make test
-
-      - name: Run architecture prototype tests
-        run: prove -v prototype/t/01-handshake.t prototype/t/02-net-websocket-adapter.t prototype/t/03-linux-event-stream.t prototype/t/04-http-upgrade.t

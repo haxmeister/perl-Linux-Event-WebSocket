@@ -11,11 +11,9 @@ use Scalar::Util qw(blessed);
 use utf8 ();
 
 use Linux::Event::Kernel::Timer;
-use Linux::Event::WebSocket::_IO;
-use Linux::Event::WebSocket::_Parser;
+use Linux::Event::WebSocket::_Engine;
+use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
-use Net::WebSocket::Endpoint::Client ();
-use Net::WebSocket::Endpoint::Server ();
 
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;
@@ -51,69 +49,29 @@ sub _dispatch_websocket ($self, $name, @argument) {
     if (my $handler = $self->can($method)) {
         return $handler->($self, @argument);
     }
-
     return;
 }
 
-sub _count_data_frame ($state, $frame) {
-    my $limit = $state->{max_message_size};
-    return if !defined $limit;
-
-    my $type = $frame->get_type;
-    $state->{fragment_bytes} = 0 if $type ne 'continuation';
-    $state->{fragment_bytes} += length $frame->get_payload;
-
-    if ($state->{fragment_bytes} > $limit) {
-        die "WebSocket message exceeds configured limit ($state->{fragment_bytes} > $limit)";
-    }
-
-    $state->{fragment_bytes} = 0 if $frame->get_fin;
-    return;
-}
-
-sub _initialize_endpoint ($self) {
+sub _initialize_engine ($self) {
     my $state = $self->_websocket_state;
-    return $state->{endpoint} if $state->{endpoint};
+    return $state->{engine} if $state->{engine};
 
-    my %io_option = (stream => $self);
-    $io_option{max_read} = $state->{max_message_size}
-        if defined $state->{max_message_size};
-    my $io = Linux::Event::WebSocket::_IO->new(%io_option);
-    my $parser = Linux::Event::WebSocket::_Parser->new(
-        $io,
-        endpoint_type => $state->{endpoint_type},
+    $state->{engine} = Linux::Event::WebSocket::_Engine->new(
+        connection       => $self,
+        endpoint_type    => $state->{endpoint_type},
+        max_message_size => $state->{max_message_size},
     );
-    my $endpoint_class = $state->{endpoint_type} eq 'client'
-        ? 'Net::WebSocket::Endpoint::Client'
-        : 'Net::WebSocket::Endpoint::Server';
-
-    my %endpoint_option = (
-        parser => $parser,
-        out    => $io,
-    );
-    if (defined $state->{max_message_size}) {
-        $endpoint_option{on_data_frame} = sub ($frame) {
-            _count_data_frame($state, $frame);
-        };
-    }
-
-    my $endpoint = $endpoint_class->new(%endpoint_option);
-    $endpoint->do_not_die_on_close;
-
-    $state->{io} = $io;
-    $state->{parser} = $parser;
-    $state->{endpoint} = $endpoint;
-    return $endpoint;
+    return $state->{engine};
 }
 
 sub _ensure_websocket_open ($self) {
     my $state = $self->_websocket_state;
     return $self if $state->{open};
 
-    $self->_initialize_endpoint;
+    $self->_initialize_engine;
     if (my $handshake = $state->{handshake}) {
-        my $protocol = eval { $handshake->get_subprotocol };
-        $state->{subprotocol} = $protocol if !$@;
+        $state->{subprotocol} =
+            Linux::Event::WebSocket::_Handshake->subprotocol($handshake);
     }
 
     $state->{open} = 1;
@@ -147,10 +105,7 @@ sub send_text ($self, $payload) {
         my $check = $bytes;
         decode('UTF-8', $check, FB_CROAK);
     }
-
-    my $state = $self->_websocket_state;
-    my $message = $state->{endpoint}->create_message('text', $bytes);
-    return $state->{io}->write($message->to_bytes);
+    return $self->_websocket_state->{engine}->send_text($bytes);
 }
 
 sub send_binary ($self, $payload) {
@@ -158,18 +113,14 @@ sub send_binary ($self, $payload) {
     croak 'send_binary(): WebSocket connection is closing'
         if $self->is_closing;
     my $bytes = _byte_payload('send_binary', $payload);
-    my $state = $self->_websocket_state;
-    my $message = $state->{endpoint}->create_message('binary', $bytes);
-    return $state->{io}->write($message->to_bytes);
+    return $self->_websocket_state->{engine}->send_binary($bytes);
 }
 
 sub ping ($self, $payload = '') {
     $self->_ensure_websocket_open;
     croak 'ping(): WebSocket connection is closing' if $self->is_closing;
     my $bytes = _byte_payload('ping', $payload);
-    my $state = $self->_websocket_state;
-    my $message = $state->{endpoint}->create_message('ping', $bytes);
-    return $state->{io}->write($message->to_bytes);
+    return $self->_websocket_state->{engine}->ping($bytes);
 }
 
 sub _cancel_close_timer ($self) {
@@ -217,10 +168,15 @@ sub close ($self, %option) {
     croak 'close(): unknown option(s): ' . join(', ', sort keys %option)
         if %option;
 
-    my %close = (code => $code);
-    $close{reason} = $reason if defined $reason;
-    $state->{endpoint}->close(%close);
-    $state->{closing} = 1;
+    my $reason_bytes = '';
+    if (defined $reason) {
+        croak 'close(): reason must be a scalar' if ref $reason;
+        $reason_bytes = utf8::is_utf8($reason)
+            ? encode('UTF-8', $reason, FB_CROAK)
+            : "$reason";
+    }
+
+    $state->{engine}->start_close($code, $reason_bytes);
     $self->_arm_close_timeout;
     return $self;
 }
@@ -241,100 +197,35 @@ sub _notify_websocket_close ($self, $code, $reason) {
     return;
 }
 
-sub _check_received_close ($self) {
-    my $state = $self->_websocket_state;
-    my $frame = $state->{endpoint}->received_close_frame or return 0;
-    return 1 if $state->{close_notified};
-
-    my ($code, $reason) = $frame->get_code_and_reason;
-    $self->_notify_websocket_close($code, $reason);
-    $self->end if !$self->is_write_ended;
-    return 1;
-}
-
-sub _protocol_failure ($self, $error) {
-    my $state = $self->_websocket_state;
-    my $message = "$error";
-    $message =~ s/\s+\z//;
-    $self->_dispatch_websocket('error', $message);
-
-    if (!$state->{closing}) {
-        my $code = $message =~ /exceeds configured limit/
-            ? 'MESSAGE_TOO_BIG' : 'PROTOCOL_ERROR';
-        eval { $state->{endpoint}->close(code => $code); 1 };
-        $state->{closing} = 1;
-    }
-
-    $self->end if !$self->is_write_ended;
-    return;
-}
-
-sub _deliver_message ($self, $message) {
-    my $type = $message->get_type;
-    my $payload = $message->get_payload;
-
-    if ($type eq 'text') {
-        my $text = eval { decode('UTF-8', $payload, FB_CROAK) };
-        if ($@) {
-            $self->_protocol_failure('invalid UTF-8 in WebSocket text message');
-            return;
-        }
-        $payload = $text;
-    }
-
+sub _websocket_engine_message ($self, $payload, $type) {
     $self->_dispatch_websocket('message', $payload, $type);
     return;
 }
 
-sub _drain_websocket_input ($self) {
-    my $state = $self->_websocket_state;
-    my $io = $state->{io};
-    my $endpoint = $state->{endpoint};
+sub _websocket_engine_error ($self, $error) {
+    $self->_dispatch_websocket('error', $error);
+    return;
+}
 
-    while (!$self->is_closed) {
-        my $before = $io->buffered_bytes;
-        my ($message, $ok, $error);
-        {
-            local $@;
-            $ok = eval {
-                $message = $endpoint->get_next_message;
-                1;
-            };
-            $error = $@;
-        }
+sub _websocket_engine_closing ($self) {
+    $self->_websocket_state->{closing} = 1;
+    return;
+}
 
-        if (!$ok) {
-            $self->_protocol_failure($error);
-            last;
-        }
-
-        my $after = $io->buffered_bytes;
-        $self->_check_received_close;
-        last if $self->is_closing && !$message;
-
-        if (defined $message) {
-            last if !ref($message) && $message eq '';
-            $self->_deliver_message($message);
-            next;
-        }
-
-        last if $after == $before;
-    }
+sub _websocket_engine_close ($self, $code, $reason) {
+    $self->_notify_websocket_close($code, $reason);
     return;
 }
 
 sub on_data ($self, $bytes) {
     $self->_ensure_websocket_open;
-    my $state = $self->_websocket_state;
-    $state->{io}->feed($bytes);
-    $self->_drain_websocket_input;
+    $self->_websocket_state->{engine}->feed($bytes);
     return;
 }
 
 sub on_eof ($self) {
     return if $self->is_closed;
     my $state = $self->_websocket_state;
-    $state->{io}->finish if $state->{io};
     $self->_notify_websocket_close(undef, 'transport EOF')
         if !$state->{close_notified};
     $self->SUPER::close if !$self->is_closed;
