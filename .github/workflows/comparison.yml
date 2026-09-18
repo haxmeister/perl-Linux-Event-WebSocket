@@ -57,7 +57,7 @@ jobs:
           npm install --prefix bench/compare
           (
             cd bench/compare/go
-            go mod download
+            go get github.com/gorilla/websocket@v1.5.3
             go build -o /tmp/gorilla-websocket-bench .
           )
 

@@ -1,6 +1,9 @@
 {
   "private": true,
   "type": "module",
+  "allowScripts": {
+    "bufferutil@4.1.0": true
+  },
   "dependencies": {
     "bufferutil": "4.1.0",
     "ws": "8.21.3"
