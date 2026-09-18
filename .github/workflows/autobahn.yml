@@ -1,0 +1,110 @@
+name: Autobahn WebSocket conformance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/autobahn.yml'
+      - 'xt/autobahn/**'
+
+concurrency:
+  group: autobahn-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server-conformance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build WebSocket distribution
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Start Perl Autobahn testee
+        run: |
+          perl -Iblib/lib xt/autobahn/echo-server.pl > /tmp/autobahn-testee.log 2>&1 &
+          echo $! > /tmp/autobahn-testee.pid
+          for attempt in {1..100}; do
+            if grep -q '^READY ' /tmp/autobahn-testee.log; then
+              cat /tmp/autobahn-testee.log
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/autobahn-testee.pid)" 2>/dev/null; then
+              cat /tmp/autobahn-testee.log
+              exit 1
+            fi
+            sleep 0.1
+          done
+          cat /tmp/autobahn-testee.log
+          exit 1
+
+      - name: Run Autobahn fuzzing client
+        id: autobahn
+        shell: bash
+        run: |
+          mkdir -p xt/autobahn/reports
+          docker_status=0
+          docker run --rm --network host \
+            -v "$PWD/xt/autobahn:/config:ro" \
+            -v "$PWD/xt/autobahn/reports:/reports" \
+            crossbario/autobahn-testsuite \
+            wstest --mode fuzzingclient --spec /config/fuzzingclient.json \
+            || docker_status=$?
+
+          report_status=0
+          if [ -f xt/autobahn/reports/servers/index.json ]; then
+            perl xt/autobahn/check-report.pl \
+              xt/autobahn/reports/servers/index.json \
+              || report_status=$?
+          else
+            echo "Autobahn did not produce index.json" >&2
+            report_status=1
+          fi
+
+          if [ "$docker_status" -ne 0 ] || [ "$report_status" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Show Perl testee log
+        if: always()
+        run: cat /tmp/autobahn-testee.log || true
+
+      - name: Stop Perl testee
+        if: always()
+        run: |
+          if [ -f /tmp/autobahn-testee.pid ]; then
+            kill "$(cat /tmp/autobahn-testee.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload Autobahn report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autobahn-server-report
+          path: xt/autobahn/reports
+          if-no-files-found: warn
