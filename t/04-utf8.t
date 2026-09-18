@@ -39,7 +39,7 @@ my %invalid = (
     short_three       => 'e282',
     overlong_four     => 'f0808080',
     above_unicode     => 'f4908080',
-    short_four        => 'f0908080',
+    short_four        => 'f09080',
     illegal_lead      => 'f5',
 );
 
