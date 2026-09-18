@@ -1,0 +1,90 @@
+name: WebSocket benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/benchmark.yml'
+      - 'bench/**'
+      - 'lib/Linux/Event/WebSocket/**'
+
+concurrency:
+  group: websocket-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            perl -V:version
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+          } | tee benchmark-environment.txt
+
+      - name: Protocol microbenchmark
+        env:
+          BENCH_SECONDS: '0.6'
+        run: perl -Iblib/lib bench/protocol.pl | tee benchmark-protocol.txt
+
+      - name: Public API echo benchmark
+        shell: bash
+        run: |
+          : > benchmark-echo.txt
+
+          for type in binary text; do
+            for bytes in 64 1024 16384; do
+              perl -Iblib/lib bench/echo.pl \
+                --type "$type" --bytes "$bytes" \
+                --clients 1 --window 32 --seconds 1.5 \
+                | tee -a benchmark-echo.txt
+            done
+          done
+
+          for clients in 10 100; do
+            perl -Iblib/lib bench/echo.pl \
+              --type binary --bytes 64 \
+              --clients "$clients" --window 8 --seconds 1.5 \
+              | tee -a benchmark-echo.txt
+          done
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-benchmark-results
+          path: |
+            benchmark-environment.txt
+            benchmark-protocol.txt
+            benchmark-echo.txt
