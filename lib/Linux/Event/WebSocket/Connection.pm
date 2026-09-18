@@ -66,7 +66,7 @@ sub _initialize_engine ($self) {
 
 sub _ensure_websocket_open ($self) {
     my $state = $self->_websocket_state;
-    return $self if $state->{open};
+    return $state if $state->{open};
 
     $self->_initialize_engine;
     if (my $handshake = $state->{handshake}) {
