@@ -78,6 +78,7 @@ _Frame      frame encoding, masking, opcodes, and close payloads
 _Parser     incremental frame parsing and wire-policy validation
 _Engine     message assembly, UTF-8, control frames, and close state
 _State      connection/application state preserved across transition
+_UTF8       RFC 3629 byte validation and Perl string conversion
 ```
 
 The handshake implementation validates method, HTTP version, Upgrade and
@@ -89,8 +90,10 @@ lengths, invalid 64-bit lengths, reserved bits and opcodes, incorrect masking,
 oversized frames, and malformed control frames before accepting their payloads.
 
 The engine reassembles fragmented text and binary messages while allowing
-interleaved control frames. Text and close reasons are validated as UTF-8.
-Binary messages remain byte strings. Incoming pings receive an identical pong.
+interleaved control frames. Text and close reasons are validated against RFC
+3629 by the private `_UTF8` helper rather than Perl Encode's stricter Unicode
+noncharacter policy. Binary messages remain byte strings. Incoming pings
+receive an identical pong.
 
 Client frames use a fresh four-byte mask from `/dev/urandom`. Server frames are
 not masked. No extensions are currently negotiated.
@@ -143,6 +146,13 @@ and local TLS client/server operation.
 
 CI targets Perl 5.36 and Perl 5.44.
 
+Repository-only Autobahn server conformance provides an independent black-box
+RFC 6455 check. With section 12 performance/limit probes and section 13
+permessage-deflate excluded, the server currently reports 294 strict OK,
+4 NON-STRICT, and 3 INFORMATIONAL outcomes; close behavior reports 298 OK and
+3 INFORMATIONAL outcomes. No Autobahn/Python code is linked into or shipped
+with the distribution.
+
 ## Native-code policy
 
 The protocol layer remains Perl until measurement demonstrates a material
@@ -155,4 +165,4 @@ reusable facility useful to multiple protocol distributions.
 - `permessage-deflate` negotiation and compression;
 - WebSocket-specific XS;
 - async/await-first APIs;
-- independent-peer and Autobahn interoperability testing.
+- Autobahn client-side conformance testing.

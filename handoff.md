@@ -33,6 +33,7 @@ Linux::Event::WebSocket::_Frame
 Linux::Event::WebSocket::_Parser
 Linux::Event::WebSocket::_Engine
 Linux::Event::WebSocket::_State
+Linux::Event::WebSocket::_UTF8
 ```
 
 The implementation supports `ws://` and `wss://`, text and binary messages,
@@ -74,6 +75,7 @@ t/00-load.t
 t/01-handshake.t
 t/02-frame-parser.t
 t/03-engine.t
+t/04-utf8.t
 t/10-client-server.t
 t/11-message-types.t
 t/12-upgrade-tail.t
@@ -90,6 +92,16 @@ transport loss, simultaneous close, and peer loss during local close.
 
 CI targets Perl 5.36 and Perl 5.44.
 
+Repository-only Autobahn server conformance is also green. The RFC 6455
+correctness run excludes section 12 performance/limit probes and section 13
+permessage-deflate. Current result: 294 strict OK, 4 NON-STRICT, 3
+INFORMATIONAL; close behavior: 298 OK and 3 INFORMATIONAL.
+
+The first Autobahn run exposed one real issue: Perl Encode's strict UTF-8 policy
+rejects Unicode noncharacters that RFC 3629 permits. The private `_UTF8`
+validator now implements the RFC 3629 byte boundary directly and is covered by
+`t/04-utf8.t`.
+
 ## Resolved core close boundary
 
 The inherited Stream `close()` collision has been resolved in Linux::Event
@@ -101,7 +113,8 @@ This distribution now requires Linux::Event 0.115 or newer.
 
 ## Remaining release work
 
-1. Test against an independent peer and the Autobahn WebSocket test suite.
+1. Run Autobahn client conformance so the Linux::Event::WebSocket client is
+   exercised against an independent fuzzing server as thoroughly as the server.
 2. Benchmark only after correctness and the API are stable; add native code only
    for a measured bottleneck.
 3. Perform a release-readiness review before the first CPAN upload.
@@ -114,6 +127,8 @@ lib/Linux/Event/WebSocket/Connection.pm
 lib/Linux/Event/WebSocket/_Handshake.pm
 lib/Linux/Event/WebSocket/_Parser.pm
 lib/Linux/Event/WebSocket/_Engine.pm
+lib/Linux/Event/WebSocket/_UTF8.pm
+t/04-utf8.t
 t/10-client-server.t
 t/12-upgrade-tail.t
 t/13-core-close-boundary.t
