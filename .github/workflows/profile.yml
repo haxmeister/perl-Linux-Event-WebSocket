@@ -1,0 +1,127 @@
+name: WebSocket hot-path profile
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/profile.yml'
+
+concurrency:
+  group: websocket-profile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+          cpanm --notest Devel::NYTProf
+          npm install --prefix bench/compare
+
+      - name: Build Linux::Event::WebSocket
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Profile public client hot path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          server_log=/tmp/websocket-profile-server.log
+          if [[ "$(nproc)" -ge 2 ]]; then
+            taskset -c 0 env PORT=9200 node bench/compare/servers/node.mjs >"$server_log" 2>&1 &
+          else
+            env PORT=9200 node bench/compare/servers/node.mjs >"$server_log" 2>&1 &
+          fi
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+
+          for _ in {1..200}; do
+            if timeout 0.1 bash -c "exec 3<>/dev/tcp/127.0.0.1/9200" 2>/dev/null; then
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$server_log" >&2 || true
+              exit 1
+            fi
+            sleep 0.05
+          done
+
+          profile_case() {
+            local label="$1"
+            local type="$2"
+            local bytes="$3"
+
+            local command=(
+              perl -d:NYTProf -Iblib/lib bench/compare/clients/linux-event.pl
+              --label "$label"
+              --host 127.0.0.1
+              --port 9200
+              --type "$type"
+              --bytes "$bytes"
+              --clients 1
+              --window 32
+              --warmup 0.5
+              --seconds 1.5
+            )
+
+            if [[ "$(nproc)" -ge 2 ]]; then
+              NYTPROF="file=nytprof-${label}.out" taskset -c 1 "${command[@]}" | tee "profile-${label}.txt"
+            else
+              NYTPROF="file=nytprof-${label}.out" "${command[@]}" | tee "profile-${label}.txt"
+            fi
+
+            nytprofcsv -f "nytprof-${label}.out" -o "nytprof-${label}"
+          }
+
+          profile_case binary64 binary 64
+          profile_case text1024 text 1024
+
+          for report in nytprof-binary64 nytprof-text1024; do
+            echo "===== $report WebSocket source profile ====="
+            while IFS= read -r file; do
+              if grep -q 'package Linux::Event::WebSocket' "$file"; then
+                echo "----- $file -----"
+                cat "$file"
+              fi
+            done < <(find "$report" -type f -name '*.csv' | sort)
+          done
+
+      - name: Upload profile results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-hot-path-profile
+          path: |
+            profile-*.txt
+            nytprof-*.out
+            nytprof-binary64/
+            nytprof-text1024/
