@@ -146,6 +146,7 @@ jobs:
       - name: Start Autobahn fuzzing server
         run: |
           mkdir -p xt/autobahn/reports
+          docker pull crossbario/autobahn-testsuite
           docker run --rm --network host \
             --name autobahn-fuzzingserver \
             -v "$PWD/xt/autobahn:/config:ro" \
