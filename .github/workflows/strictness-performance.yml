@@ -53,7 +53,8 @@ jobs:
 
       - name: Add Unicode one-way benchmark
         run: |
-          git show origin/experiment/bq-realistic-unicode:bench/unicode-one-way.pl             > /tmp/unicode-one-way.pl
+          git fetch --depth 1 origin experiment/bq-realistic-unicode
+          git show FETCH_HEAD:bench/unicode-one-way.pl > /tmp/unicode-one-way.pl
 
       - name: Record environment
         run: |
