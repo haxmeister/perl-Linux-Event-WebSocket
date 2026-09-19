@@ -1037,6 +1037,7 @@ static void mask_apply(void *data, size_t size, uint32_t mask)
 			left--;
 		}
 	}
+}
 
 static void mask_apply_offset(
 	void *data,
@@ -1059,8 +1060,6 @@ static void mask_apply_offset(
 	}
 	memcpy(&rotated, out, 4);
 	mask_apply(data, size, rotated);
-}
-
 }
 
 // -- Handshake
