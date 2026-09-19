@@ -305,13 +305,27 @@ PREINIT:
     const char *data;
 CODE:
     state = lews_bq_from_sv(self);
-    data = SvPVbyte(bytes, len);
-
     if (opcode == 1) {
+        if (SvUTF8(bytes)) {
+            data = SvPVutf8(bytes, len);
+        } else {
+            data = SvPVbyte(bytes, len);
+        }
+
+        if (!is_utf8_string_flags(
+                (const U8 *)data,
+                len,
+                UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE
+            )) {
+            croak("send_text(): payload contains invalid UTF-8");
+        }
+
         bqws_send(state->ws, BQWS_MSG_TEXT, data, (size_t)len);
     } else if (opcode == 2) {
+        data = SvPVbyte(bytes, len);
         bqws_send(state->ws, BQWS_MSG_BINARY, data, (size_t)len);
     } else if (opcode == 9) {
+        data = SvPVbyte(bytes, len);
         bqws_send_ping(state->ws, data, (size_t)len);
     } else {
         croak("unsupported bq_websocket opcode %ld", (long)opcode);

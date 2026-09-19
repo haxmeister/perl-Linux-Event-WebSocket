@@ -284,4 +284,42 @@ sub output_close_code ($wire) {
         'client engine sends UTF-8 bytes');
 }
 
+{
+    my $connection = T::Connection->new;
+    my $engine = Linux::Event::WebSocket::_Engine->new(
+        connection       => $connection,
+        endpoint_type    => 'client',
+        max_message_size => 1024,
+    );
+    $engine->send_text("wide-\x{263a}");
+
+    my $parser = Linux::Event::WebSocket::_Parser->new(
+        endpoint_type  => 'server',
+        max_frame_size => 1024,
+    );
+    $parser->feed($connection->{output}[0]);
+    my $frame = $parser->next_frame;
+    is($frame->{payload}, encode('UTF-8', "wide-\x{263a}"),
+        'native send_text encodes a Perl Unicode scalar');
+}
+
+{
+    for my $payload (
+        "\xff",
+        chr(0xd800),
+        chr(0x110000),
+    ) {
+        my $connection = T::Connection->new;
+        my $engine = Linux::Event::WebSocket::_Engine->new(
+            connection       => $connection,
+            endpoint_type    => 'server',
+            max_message_size => 1024,
+        );
+        my $ok = eval { $engine->send_text($payload); 1 };
+        ok(!$ok, 'native send_text rejects invalid RFC 3629 text');
+        like($@, qr/invalid UTF-8/,
+            'native send_text reports invalid UTF-8');
+    }
+}
+
 done_testing;
