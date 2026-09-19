@@ -10,6 +10,8 @@ use Linux::Event::WebSocket::_BQ;
 use Linux::Event::WebSocket::_Frame;
 use Linux::Event::WebSocket::_UTF8;
 
+my $BENCH_SKIP_UTF8 = $ENV{LEWS_BQ_BENCH_SKIP_UTF8} ? 1 : 0;
+
 sub new ($class, %option) {
     my $connection = delete $option{connection};
     croak 'new(): connection object is required'
@@ -151,14 +153,16 @@ sub _deliver ($self, $opcode, $payload, $connection) {
     my $type;
     if ($opcode == 1) {
         $type = 'text';
-        my $decoded = eval {
-            Linux::Event::WebSocket::_UTF8->decode($payload);
-        };
-        if ($@) {
-            $self->_fail('invalid UTF-8 in WebSocket text message', 1007);
-            return 0;
+        if (!$BENCH_SKIP_UTF8) {
+            my $decoded = eval {
+                Linux::Event::WebSocket::_UTF8->decode($payload);
+            };
+            if ($@) {
+                $self->_fail('invalid UTF-8 in WebSocket text message', 1007);
+                return 0;
+            }
+            $payload = $decoded;
         }
-        $payload = $decoded;
     } else {
         $type = 'binary';
     }
@@ -204,26 +208,26 @@ sub _handle_close ($self, $payload, $connection) {
     return 0;
 }
 
+sub _bq_event ($self, $connection, $opcode, $payload) {
+    return if $self->{failed} || $self->{received_close}
+        || $connection->is_closed;
+
+    if ($opcode == 1 || $opcode == 2) {
+        $self->_deliver($opcode, $payload, $connection);
+    } elsif ($opcode == 8) {
+        $self->_handle_close($payload, $connection);
+    }
+    return;
+}
+
 sub feed ($self, $bytes) {
     my $connection = $self->_connection;
     return if $self->{failed} || $self->{received_close}
         || $connection->is_closed;
 
     $self->{in_feed} = 1;
-    my ($events, $error, $error_name) = $self->{native}->feed($bytes);
-
-    for my $event (@$events) {
-        last if $self->{failed} || $self->{received_close}
-            || $connection->is_closed;
-
-        my ($opcode, $payload) = @$event;
-        if ($opcode == 1 || $opcode == 2) {
-            last if !$self->_deliver($opcode, $payload, $connection);
-        } elsif ($opcode == 8) {
-            $self->_handle_close($payload, $connection);
-            last;
-        }
-    }
+    my ($error, $error_name) =
+        $self->{native}->feed($self, $connection, $bytes);
 
     if (!$self->{failed} && $error) {
         $self->_fail(
