@@ -185,6 +185,47 @@ sub output_close_code ($wire) {
 }
 
 {
+    my %valid = (
+        two_byte     => [ 'c280',     0x80 ],
+        nonchar_fffe => [ 'efbfbe',   0xfffe ],
+        four_byte    => [ 'f0908080', 0x10000 ],
+        max_scalar   => [ 'f48fbfbf', 0x10ffff ],
+    );
+
+    for my $name (sort keys %valid) {
+        my ($hex, $codepoint) = @{$valid{$name}};
+        my ($engine, $connection) = server_engine();
+        $engine->feed(client_frame('text', pack('H*', $hex)));
+        is_deeply($connection->{errors}, [],
+            "$name passes Perl C API RFC 3629 validation");
+        is(ord($connection->{messages}[0][1]), $codepoint,
+            "$name is delivered as the expected Perl character");
+    }
+}
+
+{
+    my %invalid = (
+        lone_continuation => '80',
+        overlong_nul      => 'c080',
+        overlong_three    => 'e08080',
+        surrogate         => 'eda080',
+        overlong_four     => 'f0808080',
+        above_unicode     => 'f4908080',
+        truncated         => 'f09080',
+        illegal_lead      => 'f5',
+    );
+
+    for my $name (sort keys %invalid) {
+        my ($engine, $connection) = server_engine();
+        $engine->feed(client_frame('text', pack('H*', $invalid{$name})));
+        like($connection->{errors}[0], qr/UTF-8/,
+            "$name is rejected by Perl C API RFC 3629 validation");
+        is(output_close_code($connection->{output}[0]), 1007,
+            "$name sends close 1007");
+    }
+}
+
+{
     my ($engine, $connection) = server_engine();
     my $payload = Linux::Event::WebSocket::_Frame->close_payload(1000, 'done');
     $engine->feed(client_frame('close', $payload));

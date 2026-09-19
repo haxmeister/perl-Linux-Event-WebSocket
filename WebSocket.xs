@@ -54,6 +54,62 @@ lews_bq_flush(lews_bq *state)
     return out;
 }
 
+
+static SV *
+lews_bq_payload_sv(IV opcode, const char *data, size_t size)
+{
+    const U8 *bytes = (const U8 *)(data == NULL ? "" : data);
+    SV *payload = newSVpvn((const char *)bytes, size);
+
+    if (opcode == 1) {
+        const U8 *first_variant = NULL;
+
+        if (!is_utf8_invariant_string_loc(bytes, (STRLEN)size, &first_variant)) {
+            if (!is_utf8_string_flags(
+                    bytes,
+                    (STRLEN)size,
+                    UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE
+                )) {
+                SvREFCNT_dec(payload);
+                return NULL;
+            }
+            SvUTF8_on(payload);
+        }
+    }
+
+    return payload;
+}
+
+static SV *
+lews_bq_call_invalid_utf8(SV *target, SV *connection)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    PUSHs(target);
+    PUSHs(connection);
+    PUTBACK;
+
+    call_method("_bq_invalid_utf8", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    return error;
+}
+
 static SV *
 lews_bq_call_event(
     SV *target,
@@ -73,8 +129,16 @@ lews_bq_call_event(
     EXTEND(SP, 4);
     PUSHs(target);
     PUSHs(connection);
-    PUSHs(sv_2mortal(newSViv(opcode)));
-    PUSHs(sv_2mortal(newSVpvn(data == NULL ? "" : data, size)));
+    {
+        SV *payload = lews_bq_payload_sv(opcode, data, size);
+        if (payload == NULL) {
+            FREETMPS;
+            LEAVE;
+            return lews_bq_call_invalid_utf8(target, connection);
+        }
+        PUSHs(sv_2mortal(newSViv(opcode)));
+        PUSHs(sv_2mortal(payload));
+    }
     PUTBACK;
 
     call_method("_bq_event", G_DISCARD | G_EVAL);
