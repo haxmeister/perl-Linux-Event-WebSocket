@@ -2982,13 +2982,7 @@ const char *bqws_get_protocol(const bqws_socket *ws)
 bqws_msg *bqws_recv(bqws_socket *ws)
 {
 	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
-
-	/*
-	 * Linux::Event policy: a later frame error in the same transport read
-	 * must not discard complete messages that were accepted earlier.
-	 * recv_queue contains only completed messages, so allow it to drain
-	 * after ws->err has been set.
-	 */
+	if (ws->err) return NULL;
 
 	// Messages are re-combined in `recv_queue` if
 	// `recv_partial_messages` is disabled.
