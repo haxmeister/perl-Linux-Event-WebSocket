@@ -139,6 +139,43 @@ sub output_close_code ($wire) {
         'later malformed frame still sends close 1002');
 }
 
+
+{
+    my $connection = T::Connection->new;
+    my $engine;
+    $engine = Linux::Event::WebSocket::_Engine->new(
+        connection       => $connection,
+        endpoint_type    => 'server',
+        max_message_size => 1024,
+        message_handler  => sub ($ws, $payload, $type) {
+            $engine->send_text($payload);
+        },
+    );
+
+    my $bad = client_frame('text', 'bad');
+    substr($bad, 0, 1, chr(0x85));
+    $engine->feed(client_frame('text', 'first') . $bad);
+
+    my $parser = Linux::Event::WebSocket::_Parser->new(
+        endpoint_type  => 'client',
+        max_frame_size => 1024,
+    );
+    $parser->feed(join('', @{$connection->{output}}));
+
+    my $echo = $parser->next_frame;
+    is($echo->{opcode}, 1,
+        'coalesced valid message is written before later protocol close');
+    is($echo->{payload}, 'first',
+        'coalesced valid message response preserves payload');
+
+    my $close = $parser->next_frame;
+    my ($code) = Linux::Event::WebSocket::_Frame->parse_close_payload(
+        $close->{payload},
+    );
+    is($code, 1002,
+        'later malformed frame closes after the earlier response');
+}
+
 {
     my ($engine, $connection) = server_engine();
     $connection->{close_on_message} = 1;
