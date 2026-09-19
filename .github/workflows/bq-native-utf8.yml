@@ -1,0 +1,117 @@
+name: bq native UTF-8 evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'lib/Linux/Event/WebSocket/_Engine.pm'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+      - 'bench/one-way.pl'
+      - '.github/workflows/bq-native-utf8.yml'
+
+concurrency:
+  group: bq-native-utf8-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-utf8-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout native UTF-8 experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build native UTF-8 experiment
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build direct-delivery Perl UTF-8 baseline
+        run: |
+          git clone --depth 1 --branch experiment/bq-integration-hotpath \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-perl-utf8
+          (
+            cd /tmp/websocket-perl-utf8
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            echo "perl_utf8_commit=$(git -C /tmp/websocket-perl-utf8 rev-parse HEAD)"
+            echo "native_utf8_commit=$(git rev-parse HEAD)"
+          } | tee bq-native-utf8-environment.txt
+
+      - name: Run one-way comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > bq-native-utf8.txt
+
+          baseline="/tmp/websocket-perl-utf8/blib/lib:/tmp/websocket-perl-utf8/blib/arch"
+          native="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-10s ' "$label" | tee -a bq-native-utf8.txt
+            env -u LEWS_BQ_BENCH_SKIP_UTF8 \
+              PERL5LIB="$lib:${PERL5LIB:-}" \
+              perl bench/one-way.pl "$@" \
+              | tee -a bq-native-utf8.txt
+          }
+
+          for round in 1 2; do
+            echo "round=$round" | tee -a bq-native-utf8.txt
+            case_no=0
+
+            for direction in c2s s2c; do
+              for type in binary text; do
+                for bytes in 64 1024 16384; do
+                  args=(--direction "$direction" --type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                  if (( (case_no + round) % 2 )); then
+                    run_one perl-utf8 "$baseline" "${args[@]}"
+                    run_one native "$native" "${args[@]}"
+                  else
+                    run_one native "$native" "${args[@]}"
+                    run_one perl-utf8 "$baseline" "${args[@]}"
+                  fi
+                  case_no=$((case_no + 1))
+                done
+              done
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bq-native-utf8
+          path: |
+            bq-native-utf8-environment.txt
+            bq-native-utf8.txt
