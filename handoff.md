@@ -81,9 +81,10 @@ prototype across:
 - 100-client traffic;
 - broadcast fan-out at 10, 100, and 1000 subscribers.
 
-Representative optimized bq rates included about 95k/s for 64-byte text,
-84k/s for 1 KiB text, 25k/s for 16 KiB text, and 69k/s for 64-byte text at
-100 clients in the same-run engine comparison.
+The clean integration branch's external server comparison measured about
+156k/s for 64-byte text, 139k/s for 1 KiB text, 38.7k/s for 16 KiB text, and
+125k/s for 64-byte text at 100 connections. The corresponding client rates were
+about 138k/s, 126k/s, 46.1k/s, and 115k/s.
 
 The 100-subscriber fan-out test measured about 61.5k deliveries/s at 256 B,
 56.6k/s at 1 KiB, and 20.6k/s at 16 KiB.
@@ -91,16 +92,33 @@ The 100-subscriber fan-out test measured about 61.5k deliveries/s at 256 B,
 See `docs/BENCHMARKS.md` for context. Hosted-runner values are architectural
 evidence, not hardware-independent performance claims.
 
-## Correctness state before productization
+## Integration validation
 
-The experimental bq path passed normal tests on Perl 5.36 and 5.44 and both
-Autobahn client/server directions with zero conformance failures.
+The clean integration branch independently passed normal tests on Perl 5.36 and
+5.44. Its generated 0.001_002 distribution archive includes WebSocket.xs and
+the vendored bq source/license, rebuilds after extraction, and passes make test.
 
-The integration branch must independently re-establish those gates. Do not
-merge it merely because the experimental branches were green.
+Autobahn client and server both complete all 301 selected RFC 6455 cases with
+zero conformance failures:
 
-Sections 12 and 13 remain intentionally excluded from Autobahn because
-permessage-deflate is not implemented.
+- 287 OK;
+- 11 NON-STRICT;
+- 3 INFORMATIONAL;
+- close behavior: 298 OK, 3 INFORMATIONAL.
+
+The 11 NON-STRICT cases are understood. Seven are coalesced-read ordering cases
+where bq closes with 1002 on a later malformed frame without first exposing a
+completed preceding message. Four are fragmented-invalid-UTF-8 cases where bq
+waits for logical-message completion before closing with 1007. Autobahn accepts
+both behaviors. A trial change to force the first seven to strict-OK exposed
+reentrancy/batching consequences and was reverted rather than compromising the
+validated hot path.
+
+The Autobahn report checker now requires exactly 301 cases per agent so a
+truncated run cannot pass CI.
+
+Sections 12 and 13 remain intentionally excluded because permessage-deflate is
+not implemented.
 
 ## Integration checklist
 
@@ -113,12 +131,12 @@ permessage-deflate is not implemented.
 - [x] Update architecture and benchmark documentation.
 - [x] Make Autobahn/comparison/benchmark workflows load `blib/arch`.
 - [x] Add a distribution-archive CI check for vendored source/license.
-- [ ] Normal CI green on Perl 5.36 and 5.44 on this integration branch.
-- [ ] Distribution archive builds and its extracted copy passes `make test`.
-- [ ] Autobahn client green on this integration branch.
-- [ ] Autobahn server green on this integration branch.
-- [ ] Full cross-implementation comparison completes on this integration branch.
-- [ ] Review the resulting branch diff for experiment-only files or behavior.
+- [x] Normal CI green on Perl 5.36 and 5.44 on this integration branch.
+- [x] Distribution archive builds and its extracted copy passes `make test`.
+- [x] Autobahn client green on this integration branch.
+- [x] Autobahn server green on this integration branch.
+- [x] Full cross-implementation comparison completes on this integration branch.
+- [x] Review the resulting branch diff for experiment-only files or behavior.
 - [ ] Decide whether to merge into `main`.
 
 ## Core boundary
