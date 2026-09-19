@@ -95,14 +95,16 @@ sub next_frame ($self) {
     my $length;
     if ($length_code < 126) {
         $length = $length_code;
-        $self->_check_size(0, $length);
+        die "WebSocket frame payload exceeds configured limit\n"
+            if $length > $self->{max_frame_size};
     } elsif ($length_code == 126) {
         return undef if length($self->{input}) < $cursor + 2;
         $length = unpack('n', substr($self->{input}, $cursor, 2));
         $cursor += 2;
         die "WebSocket frame uses a non-minimal 16-bit payload length\n"
             if $length < 126;
-        $self->_check_size(0, $length);
+        die "WebSocket frame payload exceeds configured limit\n"
+            if $length > $self->{max_frame_size};
     } else {
         return undef if length($self->{input}) < $cursor + 8;
         my ($high, $low) = unpack('NN', substr($self->{input}, $cursor, 8));

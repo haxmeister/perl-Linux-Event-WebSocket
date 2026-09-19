@@ -151,6 +151,14 @@ for my $size (64, 1024, 16_384) {
         );
     });
 
+    measure('frame fast data masked', $size, sub {
+        Linux::Event::WebSocket::_Frame->encode_data(2, $payload, 1);
+    });
+
+    measure('frame fast data unmasked', $size, sub {
+        Linux::Event::WebSocket::_Frame->encode_data(2, $payload, 0);
+    });
+
     measure('frame benchmark persistent', $size, sub {
         my $mask = persistent_random(4);
         Linux::Event::WebSocket::_Frame->encode(

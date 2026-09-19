@@ -66,6 +66,16 @@ sub client_frame ($type, $payload, %option) {
 }
 
 sub server_engine ($limit = 1024) {
+    my ($engine, $connection) = server_engine();
+    $engine->send_binary('abc');
+    is(
+        $connection->{output}[0],
+        Linux::Event::WebSocket::_Frame->encode('binary', 'abc'),
+        'server engine fast path sends an ordinary binary frame',
+    );
+}
+
+{
     my $connection = T::Connection->new;
     my $engine = Linux::Event::WebSocket::_Engine->new(
         connection       => $connection,

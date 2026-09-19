@@ -149,13 +149,28 @@ showed the parser's local copy of its accumulated input becoming materially more
 expensive under coalesced traffic, and ASCII text was being validated/copied
 again on the echo send path.
 
-The current optimization pass therefore collapses repeated established-state
-lookups, caches the hot message callback at open time, caches the Engine
-connection while feeding a batch, keeps the parser on its owned input buffer
-instead of a copy-on-write local alias, reuses the parser's resolved frame type,
-adds a common short-length size-check fast path, and avoids redundant outbound
-ASCII validation. These are structural pure-Perl changes and must remain
-Autobahn-green before their performance result is accepted.
+The first optimization pass collapsed repeated established-state lookups,
+cached the hot message callback at open time, cached the Engine connection while
+feeding a batch, kept the parser on its owned input buffer instead of a
+copy-on-write local alias, reused the parser's resolved frame type, added a
+common short-length size-check fast path, and avoided redundant outbound ASCII
+validation.
+
+That pass is green in normal CI and Autobahn. Under the identical NYTProf
+workflow, binary 64-byte client throughput rose from about 4.1k to 7.4k msg/s
+and text 1 KiB from about 3.5k to 6.5k msg/s. Validated state lookup dropped
+from about four calls per message to one, Engine connection dereference from
+about three to one, opcode/type lookup from two to one, and the text byte-copy
+path from two to one.
+
+Comparison run 35407582470 landed on an AMD EPYC 7763 runner, while the prior
+35406148646 baseline used an Intel Xeon Platinum 8573C, so their absolute
+throughput must not be compared directly. Within the AMD run Linux::Event still
+trails Mojolicious on the small/medium server and especially client cases, so
+performance work continues. The next measured targets are generic 4-byte random
+validation, generic data-frame encoding, repeated established-state validation,
+and common unfragmented Engine method dispatch. Control/fragment/error handling
+remains on the existing correctness-first path.
 
 The first timer-driven client benchmark also exposed a separate Linux::Event
 core fairness concern: under sustained external echo traffic, nominal

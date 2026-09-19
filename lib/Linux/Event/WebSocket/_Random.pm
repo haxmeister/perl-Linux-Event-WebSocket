@@ -22,6 +22,18 @@ sub _random_fh () {
     return $RANDOM_FH;
 }
 
+sub mask_key ($class) {
+    my $fh = $RANDOM_FH // _random_fh();
+    my $bytes = '';
+    while (length($bytes) < 4) {
+        my $read = sysread($fh, $bytes, 4 - length($bytes), length($bytes));
+        next if !defined($read) && $!{EINTR};
+        die "read /dev/urandom: $!" if !defined $read;
+        die "read /dev/urandom: unexpected EOF" if $read == 0;
+    }
+    return $bytes;
+}
+
 sub bytes ($class, $length) {
     croak 'bytes(): length must be a positive integer'
         if !defined($length) || ref($length)

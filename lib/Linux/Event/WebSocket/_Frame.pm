@@ -52,6 +52,40 @@ sub mask ($class, $payload, $key) {
     return $payload ^. $mask;
 }
 
+sub _mask_data ($payload, $key) {
+    return '' if !length $payload;
+    my $mask = $key x (int(length($payload) / 4) + 1);
+    substr($mask, length($payload)) = '';
+    return $payload ^. $mask;
+}
+
+sub encode_data ($class, $opcode, $bytes, $masked) {
+    my $length = length $bytes;
+    my $mask_bit = $masked ? 0x80 : 0;
+    my $header;
+
+    if ($length < 126) {
+        $header = pack('CC', 0x80 | $opcode, $mask_bit | $length);
+    } elsif ($length < 65_536) {
+        $header = pack('CCn', 0x80 | $opcode, $mask_bit | 126, $length);
+    } else {
+        my $high = int($length / 4_294_967_296);
+        my $low = $length % 4_294_967_296;
+        $header = pack(
+            'CCNN',
+            0x80 | $opcode,
+            $mask_bit | 127,
+            $high,
+            $low,
+        );
+    }
+
+    return $header . $bytes if !$masked;
+
+    my $mask = Linux::Event::WebSocket::_Random->mask_key;
+    return $header . $mask . _mask_data($bytes, $mask);
+}
+
 sub encode ($class, $type, $payload, %option) {
     croak "encode(): unknown frame type '$type'"
         if !defined($type) || ref($type) || !exists $OPCODE{$type};

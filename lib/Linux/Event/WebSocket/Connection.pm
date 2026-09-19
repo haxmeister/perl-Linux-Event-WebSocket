@@ -52,30 +52,36 @@ sub _dispatch_websocket ($self, $name, @argument) {
     return;
 }
 
-sub _initialize_engine ($self) {
-    my $state = $self->_websocket_state;
+sub _initialize_engine ($self, $state = undef) {
+    $state //= $self->_websocket_state;
     return $state->{engine} if $state->{engine};
 
     $state->{engine} = Linux::Event::WebSocket::_Engine->new(
         connection       => $self,
         endpoint_type    => $state->{endpoint_type},
         max_message_size => $state->{max_message_size},
+        message_handler  => $state->{message_handler},
     );
     return $state->{engine};
 }
 
 sub _ensure_websocket_open ($self) {
-    my $state = $self->_websocket_state;
+    my $state = $self->SUPER::data;
+    return $state
+        if ref($state) eq 'Linux::Event::WebSocket::_State'
+        && $state->{open};
+
+    $state = $self->_websocket_state;
     return $state if $state->{open};
 
-    $self->_initialize_engine;
+    $state->{message_handler} = $state->{callbacks}{message}
+        // $self->can('websocket_message');
+    $self->_initialize_engine($state);
     if (my $handshake = $state->{handshake}) {
         $state->{subprotocol} =
             Linux::Event::WebSocket::_Handshake->subprotocol($handshake);
     }
 
-    $state->{message_handler} = $state->{callbacks}{message}
-        // $self->can('websocket_message');
     $state->{open} = 1;
     $self->_dispatch_websocket('open');
     return $state;
@@ -84,11 +90,11 @@ sub _ensure_websocket_open ($self) {
 sub _byte_payload ($operation, $payload) {
     croak "$operation(): payload must be a defined scalar"
         if !defined($payload) || ref($payload);
+    return $payload if !utf8::is_utf8($payload);
+
     my $bytes = "$payload";
-    if (utf8::is_utf8($bytes)) {
-        croak "$operation(): payload contains wide characters; encode it to bytes first"
-            if !utf8::downgrade($bytes, 1);
-    }
+    croak "$operation(): payload contains wide characters; encode it to bytes first"
+        if !utf8::downgrade($bytes, 1);
     return $bytes;
 }
 

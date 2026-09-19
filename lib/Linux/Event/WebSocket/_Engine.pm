@@ -20,6 +20,11 @@ sub new ($class, %option) {
         if !defined($endpoint_type)
         || ($endpoint_type ne 'client' && $endpoint_type ne 'server');
 
+    my $message_handler_supplied = exists $option{message_handler};
+    my $message_handler = delete $option{message_handler};
+    croak 'new(): message_handler must be a coderef'
+        if defined($message_handler) && ref($message_handler) ne 'CODE';
+
     my $max_message_size = delete $option{max_message_size};
     croak 'new(): max_message_size must be a positive integer'
         if !defined($max_message_size) || ref($max_message_size)
@@ -33,6 +38,9 @@ sub new ($class, %option) {
     my $self = bless {
         connection       => $connection,
         endpoint_type    => $endpoint_type,
+        masked            => $endpoint_type eq 'client' ? 1 : 0,
+        message_handler_supplied => $message_handler_supplied ? 1 : 0,
+        message_handler  => $message_handler,
         max_message_size => 0 + $max_message_size,
         parser            => Linux::Event::WebSocket::_Parser->new(
             endpoint_type  => $endpoint_type,
@@ -61,20 +69,32 @@ sub _write_frame ($self, $type, $payload, %option) {
     my $wire = Linux::Event::WebSocket::_Frame->encode(
         $type,
         $payload,
-        masked => $self->{endpoint_type} eq 'client' ? 1 : 0,
+        masked => $self->{masked},
         %option,
     );
     return $self->_connection->write($wire);
 }
 
 sub send_text ($self, $bytes) {
-    croak 'send_text(): WebSocket connection is closing' if $self->is_closing;
-    return $self->_write_frame('text', $bytes);
+    croak 'send_text(): WebSocket connection is closing'
+        if $self->{sent_close} || $self->{received_close};
+    my $wire = Linux::Event::WebSocket::_Frame->encode_data(
+        1,
+        $bytes,
+        $self->{masked},
+    );
+    return $self->_connection->write($wire);
 }
 
 sub send_binary ($self, $bytes) {
-    croak 'send_binary(): WebSocket connection is closing' if $self->is_closing;
-    return $self->_write_frame('binary', $bytes);
+    croak 'send_binary(): WebSocket connection is closing'
+        if $self->{sent_close} || $self->{received_close};
+    my $wire = Linux::Event::WebSocket::_Frame->encode_data(
+        2,
+        $bytes,
+        $self->{masked},
+    );
+    return $self->_connection->write($wire);
 }
 
 sub ping ($self, $bytes = '') {
@@ -127,7 +147,13 @@ sub _deliver ($self, $type, $payload, $connection) {
         }
         $payload = $decoded;
     }
-    $connection->_websocket_engine_message($payload, $type);
+    if ($self->{message_handler_supplied}) {
+        if (my $handler = $self->{message_handler}) {
+            $handler->($connection, $payload, $type);
+        }
+    } else {
+        $connection->_websocket_engine_message($payload, $type);
+    }
     return 1;
 }
 
@@ -240,7 +266,47 @@ sub feed ($self, $bytes) {
             last;
         }
         last if !$frame;
-        last if !$self->_handle_frame($frame, $connection);
+
+        my $opcode = $frame->{opcode};
+        if (($opcode == 1 || $opcode == 2)
+            && $frame->{fin}
+            && !defined($self->{fragment_type})) {
+            if (!$self->{sent_close}) {
+                my $payload = $frame->{payload};
+                if (length($payload) > $self->{max_message_size}) {
+                    $self->_fail(
+                        'WebSocket message exceeds configured limit',
+                        $connection,
+                    );
+                    last;
+                }
+
+                my $type = $frame->{type};
+                if ($type eq 'text') {
+                    my $decoded = eval {
+                        Linux::Event::WebSocket::_UTF8->decode($payload);
+                    };
+                    if ($@) {
+                        $self->_fail(
+                            'invalid UTF-8 in WebSocket text message',
+                            $connection,
+                        );
+                        last;
+                    }
+                    $payload = $decoded;
+                }
+
+                if ($self->{message_handler_supplied}) {
+                    if (my $handler = $self->{message_handler}) {
+                        $handler->($connection, $payload, $type);
+                    }
+                } else {
+                    $connection->_websocket_engine_message($payload, $type);
+                }
+            }
+        } else {
+            last if !$self->_handle_frame($frame, $connection);
+        }
         last if $connection->is_closed;
     }
     return;
