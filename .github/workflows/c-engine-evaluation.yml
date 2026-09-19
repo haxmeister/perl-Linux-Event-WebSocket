@@ -1,0 +1,153 @@
+name: WebSocket C engine evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'Makefile.PL'
+      - 'vendor/bq_websocket/**'
+      - 'lib/Linux/Event/WebSocket/_BQ.pm'
+      - 'lib/Linux/Event/WebSocket/_Engine.pm'
+      - 'bench/evaluate-engine.pl'
+      - '.github/workflows/c-engine-evaluation.yml'
+
+concurrency:
+  group: c-engine-evaluation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  three-way-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout bq experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwslay-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build bq experiment
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build current main baseline
+        run: |
+          git clone --depth 1 --branch main \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-main
+          (
+            cd /tmp/websocket-main
+            perl Makefile.PL
+            make
+          )
+
+      - name: Build wslay experiment
+        run: |
+          git clone --depth 1 --branch experiment/wslay-engine \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-wslay
+          (
+            cd /tmp/websocket-wslay
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            dpkg-query -W -f='wslay=${Version}\n' libwslay1
+            echo "main_commit=$(git -C /tmp/websocket-main rev-parse HEAD)"
+            echo "wslay_commit=$(git -C /tmp/websocket-wslay rev-parse HEAD)"
+            echo "bq_commit=$(git rev-parse HEAD)"
+            echo "bq_upstream_commit=6c188d3f0edca38d7a8926e0d30f4c145414ba4c"
+          } | tee c-engine-environment.txt
+
+      - name: Run three-way benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > c-engine-evaluation.txt
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-8s ' "$label" | tee -a c-engine-evaluation.txt
+            PERL5LIB="$lib:${PERL5LIB:-}" \
+              perl bench/evaluate-engine.pl "$@" \
+              | tee -a c-engine-evaluation.txt
+          }
+
+          main="/tmp/websocket-main/blib/lib:/tmp/websocket-main/blib/arch"
+          wslay="/tmp/websocket-wslay/blib/lib:/tmp/websocket-wslay/blib/arch"
+          bq="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_case() {
+            local slot="$1"
+            shift
+            case "$slot" in
+              0)
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                ;;
+              1)
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                ;;
+              2)
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                ;;
+            esac
+          }
+
+          for round in 1 2; do
+            echo "round=$round" | tee -a c-engine-evaluation.txt
+            case_no=0
+
+            for type in binary text; do
+              for bytes in 64 1024 16384; do
+                args=(--type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                run_case $(( (case_no + round) % 3 )) "${args[@]}"
+                case_no=$((case_no + 1))
+              done
+            done
+
+            for type in binary text; do
+              args=(--type "$type" --bytes 64 --clients 100 --window 8 --seconds 2 --warmup 0.5)
+              run_case $(( (case_no + round) % 3 )) "${args[@]}"
+              case_no=$((case_no + 1))
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-engine-evaluation
+          path: |
+            c-engine-environment.txt
+            c-engine-evaluation.txt
