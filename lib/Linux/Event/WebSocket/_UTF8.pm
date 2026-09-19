@@ -16,23 +16,26 @@ sub _byte_copy ($bytes) {
     return $copy;
 }
 
-sub _decode_bytes ($bytes) {
-    my $copy = _byte_copy($bytes);
-
-    # Most WebSocket text in practice is JSON/protocol ASCII. Keep that path
-    # entirely inside Perl's C regex engine instead of walking every byte in
-    # Perl space.
-    return $copy if $copy !~ /[\x80-\xff]/;
-
+sub _decode_copy ($copy) {
+    my $byte_length = length $copy;
     my $decoded = $copy;
     croak 'invalid RFC 3629 UTF-8' if !utf8::decode($decoded);
 
-    # Perl can represent code points outside Unicode scalar-value space.
-    # RFC 3629 cannot, and surrogate code points are also forbidden.
+    # A valid UTF-8 byte string can keep the original byte scalar when every
+    # code point was ASCII. Comparing decoded character count with input byte
+    # count is much cheaper here than scanning the entire payload with a regex.
+    return $copy if length($decoded) == $byte_length;
+
+    # Perl accepts surrogate and out-of-range code points in its internal UTF-8
+    # representation, while RFC 3629 forbids them.
     croak 'invalid RFC 3629 UTF-8'
         if $decoded =~ /[\x{d800}-\x{dfff}]|[^\x{0}-\x{10ffff}]/;
 
     return $decoded;
+}
+
+sub _decode_bytes ($bytes) {
+    return _decode_copy(_byte_copy($bytes));
 }
 
 sub validate_bytes ($class, $bytes) {
@@ -50,8 +53,7 @@ sub encode ($class, $text) {
 
     my $copy = "$text";
     if (!utf8::is_utf8($copy)) {
-        return $copy if $copy !~ /[\x80-\xff]/;
-        $class->validate_bytes($copy);
+        _decode_copy($copy);
         return $copy;
     }
 

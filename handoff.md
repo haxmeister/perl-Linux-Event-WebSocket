@@ -165,12 +165,26 @@ path from two to one.
 
 Comparison run 35407582470 landed on an AMD EPYC 7763 runner, while the prior
 35406148646 baseline used an Intel Xeon Platinum 8573C, so their absolute
-throughput must not be compared directly. Within the AMD run Linux::Event still
-trails Mojolicious on the small/medium server and especially client cases, so
-performance work continues. The next measured targets are generic 4-byte random
-validation, generic data-frame encoding, repeated established-state validation,
-and common unfragmented Engine method dispatch. Control/fragment/error handling
-remains on the existing correctness-first path.
+throughput must not be compared directly. Within that AMD run Linux::Event still trailed Mojolicious, so a second
+pure-Perl pass added a fixed 4-byte mask-key path, specialized text/binary data
+frame encoding, a trusted established-state fast lookup, cached direct message
+delivery, and an inlined common unfragmented Engine path. Normal tests and
+Autobahn are green after the accompanying test placement correction.
+
+Comparison run 35408108321 then landed on an AMD EPYC 9V74 runner. In that
+same-run matrix Linux::Event now decisively beats Mojolicious on server binary
+64 B / 1 KiB (56.2k / 51.3k vs 34.8k / 32.3k), client binary 64 B / 1 KiB
+(46.1k / 41.5k vs 37.4k / 34.0k), server text 64 B / 1 KiB
+(44.7k / 36.7k vs 31.8k / 27.9k), and client text 64 B
+(41.6k vs 34.4k). The remaining common-path miss is client text 1 KiB
+(27.8k vs 32.4k), with large text also still behind.
+
+Profiling and a focused Perl microbenchmark identify duplicate ASCII UTF-8
+validation as the next target. C-backed utf8::decode validates 1 KiB ASCII
+several times faster than the current byte-range regex. The next pass therefore
+uses utf8::decode plus a decoded-length ASCII test, retaining the explicit
+surrogate/out-of-range scalar check for non-ASCII input so RFC 3629 behavior is
+unchanged.
 
 The first timer-driven client benchmark also exposed a separate Linux::Event
 core fairness concern: under sustained external echo traffic, nominal
