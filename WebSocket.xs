@@ -89,6 +89,7 @@ CODE:
     opts.limits.max_recv_msg_size = (size_t)(max_message_size < 125 ? 125 : max_message_size);
     opts.limits.max_recv_queue_messages = SIZE_MAX;
     opts.limits.max_recv_queue_size = SIZE_MAX;
+    opts.limits.max_partial_message_parts = SIZE_MAX;
 
     if (strEQ(endpoint_type, "client")) {
         state->ws = bqws_new_client(&opts, NULL);
@@ -124,7 +125,22 @@ PREINIT:
 PPCODE:
     state = lews_bq_from_sv(self);
     data = SvPVbyte(bytes, len);
-    used = bqws_read_from(state->ws, data, (size_t)len);
+    used = 0;
+    while (used < (size_t)len) {
+        size_t n = bqws_read_from(
+            state->ws,
+            data + used,
+            (size_t)len - used
+        );
+        if (n == 0) {
+            break;
+        }
+        used += n;
+        if (bqws_get_error(state->ws) != BQWS_OK
+            || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING) {
+            break;
+        }
+    }
 
     events = newAV();
     while ((msg = bqws_recv(state->ws)) != NULL) {

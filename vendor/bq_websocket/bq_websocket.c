@@ -1676,20 +1676,13 @@ static void ws_handle_control(bqws_socket *ws, bqws_msg_imp *msg)
 			msg_to_enqueue = copy;
 		}
 
-		// Turn the PING message into a PONG
+		// Turn every PING into a PONG. Upstream intentionally retains only
+		// the latest PONG; retain all of them so each received PING can be
+		// answered independently.
 		msg->msg.type = BQWS_MSG_CONTROL_PONG;
+		ws_enqueue_send(ws, msg);
 
-		bqws_mutex_lock(&ws->state.mutex);
-
-		// Only retain the latest PONG to send back
-		if (ws->state.pong_to_send) {
-			msg_free_owned(ws, ws->state.pong_to_send);
-		}
-		ws->state.pong_to_send = msg;
-
-		bqws_mutex_unlock(&ws->state.mutex);
-
-		// Don't free the message as it will be re-sent
+		// Don't free the message as it is now owned by the send queue.
 		msg = NULL;
 
 	} else if (type == BQWS_MSG_CONTROL_PONG) {
@@ -1966,6 +1959,14 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			payload_length |= (uint64_t)h[i] << shift;
 		}
 		h += payload_ext;
+
+		// RFC 6455 control frames are limited to 125 payload octets.
+		// Reject them before payload processing so invalid PING/CLOSE frames
+		// cannot produce a PONG or echoed CLOSE first.
+		if (opcode >= 0x8 && payload_length > 125) {
+			ws_fail(ws, BQWS_ERR_PARTIAL_CONTROL);
+			return false;
+		}
 
 		// Check the payload length and cast to `size_t`
 		if (payload_length > (uint64_t)ws->limits.max_recv_msg_size) {
