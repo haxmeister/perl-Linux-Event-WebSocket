@@ -2,6 +2,14 @@ name: WebSocket implementation comparison
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'Makefile.PL'
+      - 'vendor/bq_websocket/**'
+      - 'lib/Linux/Event/WebSocket/_BQ.pm'
+      - 'lib/Linux/Event/WebSocket/_Engine.pm'
+      - '.github/workflows/comparison.yml'
   push:
     branches: [ main ]
     paths:
@@ -66,6 +74,9 @@ jobs:
         run: |
           perl Makefile.PL
           make
+
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
 
       - name: Record environment
         run: |
