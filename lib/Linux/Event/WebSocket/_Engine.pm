@@ -216,8 +216,15 @@ sub feed ($self, $bytes) {
         || $connection->is_closed;
 
     $self->{in_feed} = 1;
-    my ($error, $error_name) =
+    my ($error, $error_name, $deferred_error) =
         $self->{native}->feed($self, $connection, $bytes);
+
+    $self->{in_feed} = 0;
+
+    if ($deferred_error && !$connection->is_closed) {
+        $self->_flush($connection);
+        $self->{native}->commit_deferred_error;
+    }
 
     if (!$self->{failed} && $error) {
         $self->_fail(
@@ -228,7 +235,6 @@ sub feed ($self, $bytes) {
         );
     }
 
-    $self->{in_feed} = 0;
     $self->_flush($connection) if !$connection->is_closed;
 
     if ($self->{pending_end}

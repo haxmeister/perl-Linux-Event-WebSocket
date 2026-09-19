@@ -216,6 +216,7 @@ PREINIT:
     size_t used;
     bqws_msg *msg;
     bqws_error error;
+    bqws_error deferred_error;
     SV *callback_error;
 PPCODE:
     state = lews_bq_from_sv(self);
@@ -237,7 +238,7 @@ PPCODE:
         }
     }
 
-    while ((msg = bqws_recv_queued(state->ws)) != NULL) {
+    while ((msg = bqws_recv(state->ws)) != NULL) {
         callback_error = NULL;
 
         switch (msg->type) {
@@ -272,16 +273,30 @@ PPCODE:
     }
 
     error = bqws_get_error(state->ws);
+    deferred_error = bqws_get_deferred_error(state->ws);
+    if (error == BQWS_OK && deferred_error != BQWS_OK) {
+        error = deferred_error;
+    }
     if (used != (size_t)len && error == BQWS_OK
         && bqws_get_state(state->ws) < BQWS_STATE_CLOSING) {
         croak("bq_websocket consumed only %lu of %lu input bytes",
             (unsigned long)used, (unsigned long)len);
     }
 
-    EXTEND(SP, 2);
+    EXTEND(SP, 3);
     PUSHs(sv_2mortal(newSViv((IV)error)));
     PUSHs(sv_2mortal(newSVpv(bqws_error_str(error), 0)));
-    XSRETURN(2);
+    PUSHs(sv_2mortal(newSViv(deferred_error != BQWS_OK ? 1 : 0)));
+    XSRETURN(3);
+
+void
+commit_deferred_error(self)
+    SV *self
+PREINIT:
+    lews_bq *state;
+CODE:
+    state = lews_bq_from_sv(self);
+    bqws_commit_deferred_error(state->ws);
 
 SV *
 flush(self)

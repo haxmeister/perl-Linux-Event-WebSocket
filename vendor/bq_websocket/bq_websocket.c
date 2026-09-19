@@ -399,6 +399,7 @@ struct bqws_socket {
 	// be done without a mutex to check for errors from the same thread.
 	bqws_mutex err_mutex;
 	bqws_error err;
+	bqws_error deferred_err;
 
 	// Message queues
 	bqws_msg_queue recv_partial_queue;
@@ -533,7 +534,7 @@ static void ws_close(bqws_socket *ws)
 	}
 }
 
-static void ws_fail(bqws_socket *ws, bqws_error err)
+static void ws_fail_now(bqws_socket *ws, bqws_error err)
 {
 	bool should_report = false;
 
@@ -622,6 +623,18 @@ static void ws_fail(bqws_socket *ws, bqws_error err)
 	if (ws->error_fn && should_report) {
 		ws->error_fn(ws->error_user, ws, err);
 	}
+}
+
+static void ws_fail(bqws_socket *ws, bqws_error err)
+{
+	if (err != BQWS_ERR_IO_READ && err != BQWS_ERR_IO_WRITE
+		&& ws->recv_queue.num_messages > 0
+		&& ws->err == BQWS_OK && ws->deferred_err == BQWS_OK) {
+		ws->deferred_err = err;
+		return;
+	}
+
+	ws_fail_now(ws, err);
 }
 
 static void bqws_sha1(uint8_t digest[20], const void *data, size_t size);
@@ -2855,6 +2868,23 @@ bqws_error bqws_get_error(const bqws_socket *ws)
 	return ws->err;
 }
 
+bqws_error bqws_get_deferred_error(const bqws_socket *ws)
+{
+	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
+	return ws->deferred_err;
+}
+
+void bqws_commit_deferred_error(bqws_socket *ws)
+{
+	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
+
+	bqws_error err = ws->deferred_err;
+	if (err == BQWS_OK) return;
+
+	ws->deferred_err = BQWS_OK;
+	ws_fail_now(ws, err);
+}
+
 bool bqws_is_connecting(const bqws_socket *ws)
 {
 	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
@@ -2987,23 +3017,6 @@ bqws_msg *bqws_recv(bqws_socket *ws)
 	// Messages are re-combined in `recv_queue` if
 	// `recv_partial_messages` is disabled.
 
-	bqws_msg_imp *imp = msg_dequeue(&ws->recv_queue);
-	if (!imp) return NULL;
-	bqws_assert(imp->magic == BQWS_MSG_MAGIC);
-
-	msg_release_ownership(ws, imp);
-	return &imp->msg;
-}
-
-bqws_msg *bqws_recv_queued(bqws_socket *ws)
-{
-	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
-
-	/*
-	 * A later malformed frame may set ws->err after an earlier complete
-	 * message has already been queued. Linux::Event still delivers that
-	 * earlier message before reporting the later protocol error.
-	 */
 	bqws_msg_imp *imp = msg_dequeue(&ws->recv_queue);
 	if (!imp) return NULL;
 	bqws_assert(imp->magic == BQWS_MSG_MAGIC);
@@ -3379,7 +3392,8 @@ size_t bqws_read_from(bqws_socket *ws, const void *data, size_t size)
 	s.ptr = (char*)data;
 	s.end = s.ptr + size;
 
-	while (ws_read_data(ws, &mem_stream_recv, &s)) {
+	while (ws->deferred_err == BQWS_OK
+		&& ws_read_data(ws, &mem_stream_recv, &s)) {
 		// Keep reading as long as there is space
 	}
 

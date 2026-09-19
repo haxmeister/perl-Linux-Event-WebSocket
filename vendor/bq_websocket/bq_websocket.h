@@ -442,6 +442,13 @@ void bqws_server_reject(bqws_socket *ws);
 
 bqws_state bqws_get_state(const bqws_socket *ws);
 bqws_error bqws_get_error(const bqws_socket *ws);
+
+/*
+ * Linux::Event local extension: a parser error may be deferred when an
+ * earlier complete message is waiting for application delivery.
+ */
+bqws_error bqws_get_deferred_error(const bqws_socket *ws);
+void bqws_commit_deferred_error(bqws_socket *ws);
 bool bqws_is_connecting(const bqws_socket *ws);
 bool bqws_is_closed(const bqws_socket *ws);
 size_t bqws_get_memory_used(const bqws_socket *ws);
@@ -469,14 +476,6 @@ const char *bqws_get_protocol(const bqws_socket *ws);
 
 // Receive a message, use `bqws_free_msg()` to free the returned pointer
 bqws_msg *bqws_recv(bqws_socket *ws);
-
-/*
- * Linux::Event local extension: dequeue a message that was fully parsed before
- * a later frame put the socket into an error state. This preserves wire-order
- * delivery without changing parser read cadence.
- */
-bqws_msg *bqws_recv_queued(bqws_socket *ws);
-
 void bqws_free_msg(bqws_msg *msg);
 
 // Single message
