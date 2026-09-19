@@ -170,7 +170,24 @@ Normal CI targets Perl 5.36 and Perl 5.44.
 Repository-only Autobahn testing covers both server and client. Sections 12 and
 13 remain excluded because permessage-deflate is not implemented. Native-engine
 changes are not acceptable unless both directions remain free of conformance
-failures.
+failures. The report checker also requires all 301 selected cases so a
+truncated run cannot pass.
+
+The current bq integration reports 287 OK, 11 NON-STRICT, and 3 INFORMATIONAL
+cases in each direction, with 298 OK and 3 INFORMATIONAL close results. The
+NON-STRICT cases are accepted Autobahn behaviors, not conformance failures:
+
+- seven cases close correctly with 1002 after a later malformed frame in a
+  coalesced read, but bq does not first expose an already-complete preceding
+  message to the application;
+- four fragmented-invalid-UTF-8 cases close correctly with 1007 when the
+  logical message is completed rather than at the earliest byte at which the
+  invalid sequence can be proven.
+
+Changing the first behavior would require interleaving application delivery and
+output flushing inside bq's parse of one transport read, which would alter the
+measured batching path. It is intentionally not done solely to convert an
+Autobahn NON-STRICT classification to OK.
 
 The production suite also keeps the older frame/parser tests as an independent
 reference for wire vectors and protocol-policy regressions.
