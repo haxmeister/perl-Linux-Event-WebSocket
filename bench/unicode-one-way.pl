@@ -42,9 +42,9 @@ my %unit = (
         'type=message user=alice room=general text=hello status=ok ',
 
     'json-mixed' =>
-        '{"type":"message","user":"alice","room":"general","text":"Hello '
+        '{"type":"message","icon":"'
         . chr(0x1f642)
-        . ' from Perl","ok":true}',
+        . '","user":"alice","room":"general","text":"Hello from Perl","ok":true}',
 
     european =>
         'Cafe' . chr(0x00e9)
