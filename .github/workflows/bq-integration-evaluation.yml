@@ -1,0 +1,150 @@
+name: bq integration hot-path evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'lib/Linux/Event/WebSocket/_Engine.pm'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+      - 'bench/evaluate-engine.pl'
+      - '.github/workflows/bq-integration-evaluation.yml'
+
+concurrency:
+  group: bq-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout direct-delivery experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build direct-delivery experiment
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build corrected bq baseline
+        run: |
+          git clone --depth 1 --branch experiment/bq-websocket-engine \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-bq-baseline
+          (
+            cd /tmp/websocket-bq-baseline
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            echo "baseline_commit=$(git -C /tmp/websocket-bq-baseline rev-parse HEAD)"
+            echo "direct_commit=$(git rev-parse HEAD)"
+          } | tee bq-integration-environment.txt
+
+      - name: Run integration benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > bq-integration-evaluation.txt
+
+          baseline="/tmp/websocket-bq-baseline/blib/lib:/tmp/websocket-bq-baseline/blib/arch"
+          direct="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_base() {
+            printf '%-14s ' "baseline" | tee -a bq-integration-evaluation.txt
+            env -u LEWS_BQ_BENCH_SKIP_UTF8 \
+              PERL5LIB="$baseline:${PERL5LIB:-}" \
+              perl bench/evaluate-engine.pl "$@" \
+              | tee -a bq-integration-evaluation.txt
+          }
+
+          run_direct() {
+            printf '%-14s ' "direct" | tee -a bq-integration-evaluation.txt
+            env -u LEWS_BQ_BENCH_SKIP_UTF8 \
+              PERL5LIB="$direct:${PERL5LIB:-}" \
+              perl bench/evaluate-engine.pl "$@" \
+              | tee -a bq-integration-evaluation.txt
+          }
+
+          run_no_utf8() {
+            printf '%-14s ' "direct-no-utf8" | tee -a bq-integration-evaluation.txt
+            LEWS_BQ_BENCH_SKIP_UTF8=1 \
+              PERL5LIB="$direct:${PERL5LIB:-}" \
+              perl bench/evaluate-engine.pl "$@" \
+              | tee -a bq-integration-evaluation.txt
+          }
+
+          run_case() {
+            local slot="$1"
+            shift
+            case "$slot" in
+              0)
+                run_base "$@"
+                run_direct "$@"
+                run_no_utf8 "$@"
+                ;;
+              1)
+                run_direct "$@"
+                run_no_utf8 "$@"
+                run_base "$@"
+                ;;
+              2)
+                run_no_utf8 "$@"
+                run_base "$@"
+                run_direct "$@"
+                ;;
+            esac
+          }
+
+          for round in 1 2; do
+            echo "round=$round" | tee -a bq-integration-evaluation.txt
+            case_no=0
+
+            for type in binary text; do
+              for bytes in 64 1024 16384; do
+                args=(--type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                run_case $(( (case_no + round) % 3 )) "${args[@]}"
+                case_no=$((case_no + 1))
+              done
+            done
+
+            for type in binary text; do
+              args=(--type "$type" --bytes 64 --clients 100 --window 8 --seconds 2 --warmup 0.5)
+              run_case $(( (case_no + round) % 3 )) "${args[@]}"
+              case_no=$((case_no + 1))
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bq-integration-evaluation
+          path: |
+            bq-integration-environment.txt
+            bq-integration-evaluation.txt
