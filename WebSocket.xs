@@ -184,21 +184,32 @@ static SV *
 lews_bq_drain_events(
     lews_bq *state,
     SV *callback_target,
-    SV *connection
+    SV *connection,
+    int *delivered_data
 )
 {
     bqws_msg *msg;
+
+    if (delivered_data != NULL) {
+        *delivered_data = 0;
+    }
 
     while ((msg = bqws_recv(state->ws)) != NULL) {
         SV *callback_error = NULL;
 
         switch (msg->type) {
         case BQWS_MSG_TEXT:
+            if (delivered_data != NULL) {
+                *delivered_data = 1;
+            }
             callback_error = lews_bq_call_event(
                 callback_target, connection, 1, msg->data, msg->size
             );
             break;
         case BQWS_MSG_BINARY:
+            if (delivered_data != NULL) {
+                *delivered_data = 1;
+            }
             callback_error = lews_bq_call_event(
                 callback_target, connection, 2, msg->data, msg->size
             );
@@ -224,6 +235,37 @@ lews_bq_drain_events(
     }
 
     return NULL;
+}
+
+
+static SV *
+lews_bq_call_interframe_flush(SV *target, SV *connection)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    PUSHs(target);
+    PUSHs(connection);
+    PUTBACK;
+
+    call_method("_bq_interframe_flush", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    return error;
 }
 
 MODULE = Linux::Event::WebSocket    PACKAGE = Linux::Event::WebSocket::_BQ
@@ -287,6 +329,7 @@ PREINIT:
     bqws_msg *msg;
     bqws_error error;
     SV *callback_error;
+    int delivered_data;
 PPCODE:
     state = lews_bq_from_sv(self);
     data = SvPVbyte(bytes, len);
@@ -311,8 +354,9 @@ PPCODE:
         used += n;
 
         had_messages = state->ws->recv_queue.num_messages != 0;
+        delivered_data = 0;
         callback_error = lews_bq_drain_events(
-            state, callback_target, connection
+            state, callback_target, connection, &delivered_data
         );
         if (callback_error != NULL) {
             croak_sv(callback_error);
@@ -321,6 +365,17 @@ PPCODE:
         if (bqws_get_error(state->ws) != BQWS_OK
             || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING) {
             break;
+        }
+
+        if (delivered_data
+            && (used < (size_t)len
+                || state->ws->io.recv_buf.header_offset != 0)) {
+            callback_error = lews_bq_call_interframe_flush(
+                callback_target, connection
+            );
+            if (callback_error != NULL) {
+                croak_sv(callback_error);
+            }
         }
 
         if (n == 0 && !had_messages) {
