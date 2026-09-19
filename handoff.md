@@ -7,6 +7,71 @@
 Development version: `0.001_001`. No CPAN release has been made.
 
 
+### Realistic modern Unicode benchmark
+
+Branch: `experiment/bq-realistic-unicode`. Draft PR: #7.
+
+This benchmark was added because the earlier hot-path measurements were mostly
+ASCII. It uses one-way traffic rather than echo behavior and compares current
+main, the wslay experiment, and the optimized bq path on the same runner.
+
+ASCII-only source files are preserved. Unicode payloads are constructed at
+runtime. Profiles cover:
+
+- ASCII control traffic;
+- JSON-like mostly-ASCII application messages containing emoji;
+- European text with 2- and 3-byte UTF-8;
+- CJK-heavy 3-byte UTF-8;
+- emoji-heavy 4-byte UTF-8.
+
+Each profile is measured client->server and server->client around 64 B, 1 KiB,
+and 16 KiB wire sizes. Mixed JSON, CJK, and emoji also have 100-client small
+message cases.
+
+The initial full matrix showed the optimized bq path ahead across all Unicode
+profiles and sizes. Representative two-round client->server averages:
+
+- European 64 B: main 56.8k/s, wslay 82.3k/s, bq 105.8k/s;
+- European 1 KiB: main 13.9k/s, wslay 23.9k/s, bq 71.7k/s;
+- European 16 KiB: main 1.07k/s, wslay 1.92k/s, bq 15.7k/s;
+- CJK 64 B: main 64.0k/s, wslay 92.0k/s, bq 107.0k/s;
+- CJK 1 KiB: main 26.6k/s, wslay 39.1k/s, bq 86.4k/s;
+- CJK 16 KiB: main 2.58k/s, wslay 4.06k/s, bq 20.4k/s;
+- emoji 64 B: main 67.3k/s, wslay 93.0k/s, bq 107.5k/s;
+- emoji 1 KiB: main 30.7k/s, wslay 44.1k/s, bq 85.9k/s;
+- emoji 16 KiB: main 3.23k/s, wslay 4.74k/s, bq 21.3k/s.
+
+At 100 clients / about 256 B, CJK averaged main 45.1k/s, wslay 64.1k/s,
+bq 85.7k/s; emoji averaged main 47.8k/s, wslay 66.7k/s, bq 85.5k/s.
+
+The first 64-byte mixed-JSON template could terminate before reaching its emoji,
+so that case was corrected and rerun separately. The corrected template puts the
+emoji near the beginning and therefore guarantees genuinely mixed UTF-8 even at
+64 bytes. Corrected two-round averages:
+
+client -> server:
+
+- 64 B: main 34.7k/s, wslay 63.8k/s, bq 82.5k/s;
+- 256 B: main 22.7k/s, wslay 41.8k/s, bq 76.2k/s;
+- 1 KiB: main 9.95k/s, wslay 18.0k/s, bq 60.1k/s;
+- 16 KiB: main 809/s, wslay 1.46k/s, bq 11.85k/s.
+
+server -> client:
+
+- 64 B: main 48.0k/s, wslay 66.7k/s, bq 90.5k/s;
+- 256 B: main 27.3k/s, wslay 45.5k/s, bq 82.9k/s;
+- 1 KiB: main 10.7k/s, wslay 19.1k/s, bq 64.4k/s;
+- 16 KiB: main 815/s, wslay 1.53k/s, bq 11.8k/s.
+
+For corrected mixed JSON at 100 clients / 256 B, main averaged 20.4k/s,
+wslay 37.8k/s, and bq 65.4k/s.
+
+Conclusion: the optimized bq design is not an ASCII-specialized win. Its
+advantage survives realistic mixed Unicode and becomes larger as Unicode text
+messages grow. Dense CJK/emoji traffic is also strong. The benchmark therefore
+supports bq for modern chat, JSON/event, international text, and emoji-bearing
+applications rather than only synthetic ASCII or echo workloads.
+
 ### bq native send_text measurement
 
 Branch: `experiment/bq-native-send-text`. Draft PR: #6.
