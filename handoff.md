@@ -36,17 +36,29 @@ green across the 301 selected non-compression cases with zero conformance
 failures: 287 OK, 11 NON-STRICT, 3 INFORMATIONAL; close behavior is 298 OK
 and 3 INFORMATIONAL.
 
-The first three-way same-run benchmark before the final correctness fixes showed
-bq materially outperforming both current main and wslay on most workloads,
-including the large-message cases where wslay regresses. Representative rates
-on an AMD EPYC 7763 runner were about 92k/s binary 64 B, 82k/s binary 1 KiB,
-15-17k/s binary 16 KiB, 64-65k/s text 64 B, 59-60k/s text 1 KiB, and
-17.7-17.9k/s text 16 KiB. A fresh benchmark run after the correctness fixes is
-the current performance gate.
+The post-fix three-way same-run benchmark confirms the performance result.
+On an AMD EPYC 7763 runner, two rounds produced approximately:
 
-Do not merge this experiment solely from the early performance result. Preserve
-Autobahn correctness, compare the completed post-fix benchmark against main and
-wslay, and review the maintenance cost of carrying the small vendored C library.
+- binary 64 B: bq 90.4-90.8k/s, wslay 76.3-77.4k/s, main 35.1-35.3k/s;
+- binary 1 KiB: bq 81.6-83.5k/s, wslay 61.8-62.6k/s, main 31.0k/s;
+- binary 16 KiB: bq 15.3-15.4k/s, wslay 9.3-12.3k/s, main 11.5k/s;
+- text 64 B: bq 64.4-64.7k/s, wslay 68.2-69.7k/s, main 27.0-30.4k/s;
+- text 1 KiB: bq 59.0k/s, wslay 43.3-43.8k/s, main 26.0-27.3k/s;
+- text 16 KiB: bq 18.0-18.8k/s, wslay 5.3-5.4k/s, main 9.8-10.0k/s;
+- binary 64 B / 100 clients: bq 63.2-63.3k/s, wslay 55.8-57.3k/s,
+  main 24.5-26.3k/s;
+- text 64 B / 100 clients: bq 48.7-51.3k/s, wslay 47.4-54.5k/s,
+  main 21.6-22.5k/s.
+
+bq is therefore the strongest measured engine overall so far. wslay retains a
+small advantage for tiny text in some runs, but bq avoids wslay's severe
+large-text regression and is substantially faster than current main throughout
+the measured matrix.
+
+Do not merge this experiment solely from performance. Review the maintenance
+cost of carrying the small vendored C library, the higher Autobahn NON-STRICT
+count versus main/wslay, and the local RFC corrections before making an adoption
+decision.
 
 Do not modify Linux::Event core, Linux::Event::HTTP, Uniform::HTTP, or another
 repository unless the user explicitly authorizes it.
