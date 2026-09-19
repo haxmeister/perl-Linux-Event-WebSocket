@@ -2004,14 +2004,15 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 		} else if (opcode == 0x1 || opcode == 0x2) {
 			// Text or Binary
 			type = opcode == 0x1 ? BQWS_MSG_TEXT : BQWS_MSG_BINARY;
-			if (!fin) {
-				if (buf->partial_type != BQWS_MSG_INVALID) {
-					// New partial message even though one is already
-					// being sent
-					ws_fail(ws, BQWS_ERR_UNFINISHED_PARTIAL);
-					return false;
-				}
 
+			// A new data message cannot begin until the current fragmented
+			// message has received its final continuation frame.
+			if (buf->partial_type != BQWS_MSG_INVALID) {
+				ws_fail(ws, BQWS_ERR_UNFINISHED_PARTIAL);
+				return false;
+			}
+
+			if (!fin) {
 				buf->partial_type = type;
 				type = (bqws_msg_type)(type | BQWS_MSG_PARTIAL_BIT);
 			}
