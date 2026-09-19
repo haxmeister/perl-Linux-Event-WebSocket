@@ -7,6 +7,43 @@
 Development version: `0.001_001`. No CPAN release has been made.
 
 
+### bq integration hot-path measurement
+
+Branch: `experiment/bq-integration-hotpath`. Draft PR: #3. This branch is
+based on the corrected bq experiment and exists only to measure integration
+overhead.
+
+The prototype removes per-message Perl AV event construction. XS now calls the
+private Engine directly with connection, opcode, and payload. Default behavior
+retains all UTF-8 validation and is green on normal CI (Perl 5.36 and 5.44) and
+Autobahn client/server conformance.
+
+A benchmark-only switch, `LEWS_BQ_BENCH_SKIP_UTF8=1`, temporarily bypasses
+text-message UTF-8 validation on receive and send. It is not intended as a
+shipping option; it exists only to isolate the validation cost.
+
+Same-run two-round averages on AMD EPYC 7763:
+
+- binary 64 B: baseline 90.3k/s, direct 88.9k/s;
+- binary 1 KiB: baseline 82.1k/s, direct 82.0k/s;
+- binary 16 KiB: baseline 16.1k/s, direct 18.8k/s;
+- text 64 B: baseline 64.8k/s, direct 63.0k/s, no-UTF8 88.0k/s;
+- text 1 KiB: baseline 58.3k/s, direct 58.3k/s, no-UTF8 81.3k/s;
+- text 16 KiB: baseline 15.3k/s, direct 17.3k/s, no-UTF8 26.2k/s;
+- binary 64 B / 100 clients: baseline 68.7k/s, direct 67.0k/s;
+- text 64 B / 100 clients: baseline 49.3k/s, direct 50.1k/s,
+  no-UTF8 65.9k/s.
+
+Conclusion: AV event construction is not the dominant remaining cost. Direct
+delivery is essentially neutral for small/medium messages, with a measurable
+large-message gain. Perl-side UTF-8 validation is the major text-path cost:
+removing it for measurement improves the direct path by about 40% at 64 B and
+1 KiB, 52% at 16 KiB, and 32% at 100 clients.
+
+The next performance question is therefore how to preserve the project's RFC
+3629 behavior while moving UTF-8 validation/decoding out of the Perl hot path,
+preferably into the native adapter without duplicating validation on echo send.
+
 ### Active bq_websocket experiment
 
 Branch: `experiment/bq-websocket-engine`. Draft PR: #2.
