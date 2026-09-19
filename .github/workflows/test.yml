@@ -48,3 +48,54 @@ jobs:
 
       - name: Run production tests
         run: make test
+
+  dist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          perl Makefile.PL
+          make manifest
+          make dist
+
+          archive=$(ls Linux-Event-WebSocket-*.tar.gz)
+          tar -tzf "$archive" > /tmp/dist-files.txt
+          prefix=$(head -n 1 /tmp/dist-files.txt | cut -d/ -f1)
+
+          for path in             WebSocket.xs             vendor/bq_websocket/LICENSE             vendor/bq_websocket/README.md             vendor/bq_websocket/bq_websocket.c             vendor/bq_websocket/bq_websocket.h
+          do
+            grep -qx "$prefix/$path" /tmp/dist-files.txt
+          done
+
+          mkdir /tmp/lews-disttest
+          tar -xzf "$archive" -C /tmp/lews-disttest
+          cd "/tmp/lews-disttest/$prefix"
+          perl Makefile.PL
+          make
+          make test
