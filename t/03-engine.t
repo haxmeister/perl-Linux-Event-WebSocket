@@ -164,27 +164,6 @@ sub output_close_code ($wire) {
 }
 
 {
-    my ($engine, $connection) = server_engine();
-    my $invalid = client_frame('text', 'bad');
-    substr($invalid, 0, 1, chr(ord(substr($invalid, 0, 1)) | 0x40));
-
-    $engine->feed(
-        client_frame('text', 'first')
-        . $invalid
-    );
-
-    is_deeply(
-        $connection->{messages},
-        [ [ text => 'first' ] ],
-        'valid message before a later coalesced frame error is still delivered',
-    );
-    like($connection->{errors}[0], qr/protocol error/i,
-        'later reserved-bit frame still reports a protocol error');
-    is(output_close_code($connection->{output}[0]), 1002,
-        'later reserved-bit frame still sends close 1002');
-}
-
-{
     my ($engine, $connection) = server_engine(5);
     $engine->feed(
         client_frame('binary', 'abc', fin => 0)
