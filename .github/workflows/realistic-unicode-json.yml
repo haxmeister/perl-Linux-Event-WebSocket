@@ -1,0 +1,118 @@
+name: focused mixed JSON Unicode evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'bench/unicode-one-way.pl'
+      - '.github/workflows/realistic-unicode-json.yml'
+
+concurrency:
+  group: realistic-unicode-json-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mixed-json:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwslay-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build optimized bq
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build comparison engines
+        run: |
+          git clone --depth 1 --branch main \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-main
+          (cd /tmp/websocket-main && perl Makefile.PL && make)
+
+          git clone --depth 1 --branch experiment/wslay-engine \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-wslay
+          (cd /tmp/websocket-wslay && perl Makefile.PL && make)
+
+      - name: Run focused mixed JSON comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > realistic-unicode-json.txt
+
+          main="/tmp/websocket-main/blib/lib:/tmp/websocket-main/blib/arch"
+          wslay="/tmp/websocket-wslay/blib/lib:/tmp/websocket-wslay/blib/arch"
+          bq="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-7s ' "$label" | tee -a realistic-unicode-json.txt
+            PERL5LIB="$lib:${PERL5LIB:-}" \
+              perl bench/unicode-one-way.pl "$@" \
+              | tee -a realistic-unicode-json.txt
+          }
+
+          run_case() {
+            local slot="$1"
+            shift
+            case "$slot" in
+              0)
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                ;;
+              1)
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                ;;
+              2)
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                ;;
+            esac
+          }
+
+          case_no=0
+          for round in 1 2; do
+            echo "round=$round" | tee -a realistic-unicode-json.txt
+
+            for direction in c2s s2c; do
+              for bytes in 64 256 1024 16384; do
+                args=(--direction "$direction" --profile json-mixed --bytes "$bytes" --clients 1 --window 32 --seconds 1.5 --warmup 0.4)
+                run_case $(( (case_no + round) % 3 )) "${args[@]}"
+                case_no=$((case_no + 1))
+              done
+            done
+
+            args=(--direction c2s --profile json-mixed --bytes 256 --clients 100 --window 8 --seconds 1.5 --warmup 0.4)
+            run_case $(( (case_no + round) % 3 )) "${args[@]}"
+            case_no=$((case_no + 1))
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: realistic-unicode-json
+          path: realistic-unicode-json.txt
