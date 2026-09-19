@@ -61,15 +61,18 @@ sub is_closing ($self) {
     return !!($self->{sent_close} || $self->{received_close});
 }
 
-sub _flush ($self, $connection = undef) {
-    return 0 if $self->{in_feed};
-
+sub _flush_native ($self, $connection = undef) {
     my $wire = $self->{native}->flush;
     return 0 if !length $wire;
 
     $connection //= $self->_connection;
     return 0 if $connection->is_closed;
     return $connection->write($wire);
+}
+
+sub _flush ($self, $connection = undef) {
+    return 0 if $self->{in_feed};
+    return $self->_flush_native($connection);
 }
 
 sub _queue_message ($self, $opcode, $bytes) {
@@ -195,6 +198,12 @@ sub _bq_invalid_utf8 ($self, $connection) {
     return if $self->{failed} || $self->{received_close}
         || $connection->is_closed;
     $self->_fail('invalid UTF-8 in WebSocket text message', 1007);
+    return;
+}
+
+sub _bq_interframe_flush ($self, $connection) {
+    return if $connection->is_closed;
+    $self->_flush_native($connection);
     return;
 }
 
