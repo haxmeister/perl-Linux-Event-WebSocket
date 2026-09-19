@@ -54,6 +54,154 @@ lews_bq_flush(lews_bq *state)
     return out;
 }
 
+
+static int
+lews_utf8_rfc3629(const uint8_t *s, size_t len, int *has_non_ascii)
+{
+    size_t i = 0;
+    int non_ascii = 0;
+
+    while (i < len) {
+        uint8_t c = s[i];
+
+        if (c <= 0x7f) {
+            ++i;
+            continue;
+        }
+
+        non_ascii = 1;
+
+        if (c >= 0xc2 && c <= 0xdf) {
+            if (i + 1 >= len
+                || s[i + 1] < 0x80 || s[i + 1] > 0xbf) {
+                return 0;
+            }
+            i += 2;
+            continue;
+        }
+
+        if (c == 0xe0) {
+            if (i + 2 >= len
+                || s[i + 1] < 0xa0 || s[i + 1] > 0xbf
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf) {
+                return 0;
+            }
+            i += 3;
+            continue;
+        }
+
+        if ((c >= 0xe1 && c <= 0xec) || (c >= 0xee && c <= 0xef)) {
+            if (i + 2 >= len
+                || s[i + 1] < 0x80 || s[i + 1] > 0xbf
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf) {
+                return 0;
+            }
+            i += 3;
+            continue;
+        }
+
+        if (c == 0xed) {
+            if (i + 2 >= len
+                || s[i + 1] < 0x80 || s[i + 1] > 0x9f
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf) {
+                return 0;
+            }
+            i += 3;
+            continue;
+        }
+
+        if (c == 0xf0) {
+            if (i + 3 >= len
+                || s[i + 1] < 0x90 || s[i + 1] > 0xbf
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf
+                || s[i + 3] < 0x80 || s[i + 3] > 0xbf) {
+                return 0;
+            }
+            i += 4;
+            continue;
+        }
+
+        if (c >= 0xf1 && c <= 0xf3) {
+            if (i + 3 >= len
+                || s[i + 1] < 0x80 || s[i + 1] > 0xbf
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf
+                || s[i + 3] < 0x80 || s[i + 3] > 0xbf) {
+                return 0;
+            }
+            i += 4;
+            continue;
+        }
+
+        if (c == 0xf4) {
+            if (i + 3 >= len
+                || s[i + 1] < 0x80 || s[i + 1] > 0x8f
+                || s[i + 2] < 0x80 || s[i + 2] > 0xbf
+                || s[i + 3] < 0x80 || s[i + 3] > 0xbf) {
+                return 0;
+            }
+            i += 4;
+            continue;
+        }
+
+        return 0;
+    }
+
+    if (has_non_ascii != NULL) {
+        *has_non_ascii = non_ascii;
+    }
+    return 1;
+}
+
+static SV *
+lews_bq_payload_sv(IV opcode, const char *data, size_t size)
+{
+    const uint8_t *bytes = (const uint8_t *)(data == NULL ? "" : data);
+    SV *payload = newSVpvn((const char *)bytes, size);
+
+    if (opcode == 1) {
+        int has_non_ascii = 0;
+        if (!lews_utf8_rfc3629(bytes, size, &has_non_ascii)) {
+            SvREFCNT_dec(payload);
+            return NULL;
+        }
+        if (has_non_ascii) {
+            SvUTF8_on(payload);
+        }
+    }
+
+    return payload;
+}
+
+static SV *
+lews_bq_call_invalid_utf8(SV *target, SV *connection)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    PUSHs(target);
+    PUSHs(connection);
+    PUTBACK;
+
+    call_method("_bq_invalid_utf8", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    return error;
+}
+
 static SV *
 lews_bq_call_event(
     SV *target,
@@ -73,8 +221,16 @@ lews_bq_call_event(
     EXTEND(SP, 4);
     PUSHs(target);
     PUSHs(connection);
-    PUSHs(sv_2mortal(newSViv(opcode)));
-    PUSHs(sv_2mortal(newSVpvn(data == NULL ? "" : data, size)));
+    {
+        SV *payload = lews_bq_payload_sv(opcode, data, size);
+        if (payload == NULL) {
+            FREETMPS;
+            LEAVE;
+            return lews_bq_call_invalid_utf8(target, connection);
+        }
+        PUSHs(sv_2mortal(newSViv(opcode)));
+        PUSHs(sv_2mortal(payload));
+    }
     PUTBACK;
 
     call_method("_bq_event", G_DISCARD | G_EVAL);

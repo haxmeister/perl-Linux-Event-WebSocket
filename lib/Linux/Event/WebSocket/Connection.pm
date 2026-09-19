@@ -15,8 +15,6 @@ use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 use Linux::Event::WebSocket::_UTF8;
 
-my $BENCH_SKIP_UTF8 = $ENV{LEWS_BQ_BENCH_SKIP_UTF8} ? 1 : 0;
-
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;
     croak ref($self) . ': missing Linux::Event::WebSocket connection state'
@@ -106,11 +104,6 @@ sub send_text ($self, $payload) {
     my $state = $self->_ensure_websocket_open;
     croak 'send_text(): WebSocket connection is closing'
         if $state->{closing};
-
-    if ($BENCH_SKIP_UTF8) {
-        my $bytes = _byte_payload('send_text', $payload);
-        return $state->{engine}->send_text($bytes);
-    }
 
     my $bytes = eval {
         Linux::Event::WebSocket::_UTF8->encode($payload);

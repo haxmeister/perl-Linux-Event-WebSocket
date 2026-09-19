@@ -10,8 +10,6 @@ use Linux::Event::WebSocket::_BQ;
 use Linux::Event::WebSocket::_Frame;
 use Linux::Event::WebSocket::_UTF8;
 
-my $BENCH_SKIP_UTF8 = $ENV{LEWS_BQ_BENCH_SKIP_UTF8} ? 1 : 0;
-
 sub new ($class, %option) {
     my $connection = delete $option{connection};
     croak 'new(): connection object is required'
@@ -150,22 +148,7 @@ sub _deliver ($self, $opcode, $payload, $connection) {
         return 0;
     }
 
-    my $type;
-    if ($opcode == 1) {
-        $type = 'text';
-        if (!$BENCH_SKIP_UTF8) {
-            my $decoded = eval {
-                Linux::Event::WebSocket::_UTF8->decode($payload);
-            };
-            if ($@) {
-                $self->_fail('invalid UTF-8 in WebSocket text message', 1007);
-                return 0;
-            }
-            $payload = $decoded;
-        }
-    } else {
-        $type = 'binary';
-    }
+    my $type = $opcode == 1 ? 'text' : 'binary';
 
     if ($self->{message_handler_supplied}) {
         if (my $handler = $self->{message_handler}) {
@@ -206,6 +189,13 @@ sub _handle_close ($self, $payload, $connection) {
     $connection->_websocket_engine_close($code, $decoded);
     $self->{pending_end} = 1;
     return 0;
+}
+
+sub _bq_invalid_utf8 ($self, $connection) {
+    return if $self->{failed} || $self->{received_close}
+        || $connection->is_closed;
+    $self->_fail('invalid UTF-8 in WebSocket text message', 1007);
+    return;
 }
 
 sub _bq_event ($self, $connection, $opcode, $payload) {
