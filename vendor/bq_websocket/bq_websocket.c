@@ -3371,6 +3371,28 @@ size_t bqws_read_from(bqws_socket *ws, const void *data, size_t size)
 	return s.ptr - (char*)data;
 }
 
+size_t bqws_read_from_one_message(bqws_socket *ws, const void *data, size_t size)
+{
+	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
+	bqws_assert(!ws->user_io.recv_fn);
+
+	bqws_mutex_lock(&ws->io.mutex);
+
+	bqws_mem_stream s;
+	s.ptr = (char*)data;
+	s.end = s.ptr + size;
+
+	size_t queued_before = ws->recv_queue.num_messages;
+	while (ws->recv_queue.num_messages == queued_before
+		&& ws_read_data(ws, &mem_stream_recv, &s)) {
+		// Stop as soon as one complete message/control frame is queued.
+	}
+
+	bqws_mutex_unlock(&ws->io.mutex);
+
+	return s.ptr - (char*)data;
+}
+
 size_t bqws_write_to(bqws_socket *ws, void *data, size_t size)
 {
 	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);

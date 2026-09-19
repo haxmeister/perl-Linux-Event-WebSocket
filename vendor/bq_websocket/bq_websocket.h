@@ -508,6 +508,15 @@ void bqws_update_io_write(bqws_socket *ws);
 
 // Non-callback IO: Read data to send to the peer or write data received from the peer.
 size_t bqws_read_from(bqws_socket *ws, const void *data, size_t size);
+
+/*
+ * Linux::Event local extension: consume input only until a complete message
+ * becomes available to bqws_recv(), or until parsing cannot make progress.
+ * This lets the adapter deliver earlier valid messages before parsing a later
+ * malformed frame coalesced in the same transport read.
+ */
+size_t bqws_read_from_one_message(bqws_socket *ws, const void *data, size_t size);
+
 size_t bqws_write_to(bqws_socket *ws, void *data, size_t size);
 
 // Direct control
