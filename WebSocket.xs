@@ -56,25 +56,17 @@ lews_bq_flush(lews_bq *state)
 
 
 static SV *
-lews_bq_payload_sv(IV opcode, const char *data, size_t size)
+lews_bq_payload_sv(
+    IV opcode,
+    const char *data,
+    size_t size,
+    int text_non_ascii
+)
 {
-    const U8 *bytes = (const U8 *)(data == NULL ? "" : data);
-    SV *payload = newSVpvn((const char *)bytes, size);
+    SV *payload = newSVpvn(data == NULL ? "" : data, size);
 
-    if (opcode == 1) {
-        const U8 *first_variant = NULL;
-
-        if (!is_utf8_invariant_string_loc(bytes, (STRLEN)size, &first_variant)) {
-            if (!is_utf8_string_flags(
-                    bytes,
-                    (STRLEN)size,
-                    UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE
-                )) {
-                SvREFCNT_dec(payload);
-                return NULL;
-            }
-            SvUTF8_on(payload);
-        }
+    if (opcode == 1 && text_non_ascii) {
+        SvUTF8_on(payload);
     }
 
     return payload;
@@ -116,7 +108,8 @@ lews_bq_call_event(
     SV *connection,
     IV opcode,
     const char *data,
-    size_t size
+    size_t size,
+    int text_non_ascii
 )
 {
     SV *error = NULL;
@@ -130,12 +123,9 @@ lews_bq_call_event(
     PUSHs(target);
     PUSHs(connection);
     {
-        SV *payload = lews_bq_payload_sv(opcode, data, size);
-        if (payload == NULL) {
-            FREETMPS;
-            LEAVE;
-            return lews_bq_call_invalid_utf8(target, connection);
-        }
+        SV *payload = lews_bq_payload_sv(
+            opcode, data, size, text_non_ascii
+        );
         PUSHs(sv_2mortal(newSViv(opcode)));
         PUSHs(sv_2mortal(payload));
     }
@@ -244,17 +234,22 @@ PPCODE:
         switch (msg->type) {
         case BQWS_MSG_TEXT:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 1, msg->data, msg->size
+                callback_target,
+                connection,
+                1,
+                msg->data,
+                msg->size,
+                lews_bqws_msg_text_non_ascii(msg) ? 1 : 0
             );
             break;
         case BQWS_MSG_BINARY:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 2, msg->data, msg->size
+                callback_target, connection, 2, msg->data, msg->size, 0
             );
             break;
         case BQWS_MSG_CONTROL_CLOSE:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 8, msg->data, msg->size
+                callback_target, connection, 8, msg->data, msg->size, 0
             );
             break;
         case BQWS_MSG_CONTROL_PING:

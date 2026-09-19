@@ -285,6 +285,9 @@ struct bqws_msg_imp {
 	// Linked list in `bqws_msg_queue`
 	bqws_msg_imp *prev;
 
+	/* Linux::Event metadata populated by incremental UTF-8 validation. */
+	bool text_non_ascii;
+
 	bqws_msg msg;
 };
 
@@ -459,6 +462,7 @@ struct bqws_socket {
 		uint8_t utf8_need;
 		uint8_t utf8_next_min;
 		uint8_t utf8_next_max;
+		bool utf8_non_ascii;
 
 		// Handshake
 		bqws_handshake_buffer handshake;
@@ -834,6 +838,7 @@ static bqws_msg_imp *msg_alloc(bqws_socket *ws, bqws_msg_type type, size_t size)
 	msg->owner = ws;
 	msg->allocator = ws->allocator;
 	msg->prev = NULL;
+	msg->text_non_ascii = false;
 	msg->msg.socket = ws;
 	msg->msg.type = type;
 	msg->msg.size = size;
@@ -1597,10 +1602,15 @@ static void lews_bqws_utf8_reset(bqws_socket *ws)
 	ws->io.utf8_need = 0;
 	ws->io.utf8_next_min = 0x80;
 	ws->io.utf8_next_max = 0xbf;
+	ws->io.utf8_non_ascii = false;
 }
 
 static bool lews_bqws_utf8_consume_byte(bqws_socket *ws, uint8_t byte)
 {
+	if (byte > 0x7f) {
+		ws->io.utf8_non_ascii = true;
+	}
+
 	if (ws->io.utf8_need != 0) {
 		if (byte < ws->io.utf8_next_min || byte > ws->io.utf8_next_max) {
 			return false;
@@ -1679,6 +1689,11 @@ static bool lews_bqws_utf8_consume_range(
 static bool lews_bqws_is_text_type(bqws_msg_type type)
 {
 	return (type & BQWS_MSG_TYPE_MASK) == BQWS_MSG_TEXT;
+}
+
+static bool lews_bqws_msg_text_non_ascii(const bqws_msg *msg)
+{
+	return msg_imp((bqws_msg *)msg)->text_non_ascii;
 }
 
 static void ws_handle_control(bqws_socket *ws, bqws_msg_imp *msg)
@@ -2280,6 +2295,9 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			msg_free_owned(ws, msg);
 
 			bqws_assert(offset == combined->msg.size);
+			if (base_type == BQWS_MSG_TEXT) {
+				combined->text_non_ascii = ws->io.utf8_non_ascii;
+			}
 
 			ws_enqueue_recv(ws, combined);
 
@@ -2302,6 +2320,9 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			ws_handle_control(ws, msg);
 		} else {
 			// Non-partial data message
+			if (lews_bqws_is_text_type(type)) {
+				msg->text_non_ascii = ws->io.utf8_non_ascii;
+			}
 			ws_enqueue_recv(ws, msg);
 		}
 	}
