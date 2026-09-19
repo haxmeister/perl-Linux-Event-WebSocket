@@ -454,6 +454,13 @@ struct bqws_socket {
 		bqws_timestamp last_ping_ts;
 		size_t recv_partial_size;
 
+		// Linux::Event incremental RFC 3629 validation state for the
+		// currently received text message. This survives WebSocket
+		// continuation frames but not logical message boundaries.
+		uint8_t lews_utf8_remaining;
+		uint8_t lews_utf8_min;
+		uint8_t lews_utf8_max;
+
 		// Handshake
 		bqws_handshake_buffer handshake;
 		bqws_handshake_buffer handshake_overflow;
@@ -1518,6 +1525,81 @@ static bool lews_bqws_valid_close_code(uint16_t code)
 		|| (code >= 3000 && code <= 4999);
 }
 
+
+static void lews_bqws_utf8_stream_reset(bqws_socket *ws)
+{
+	ws->io.lews_utf8_remaining = 0;
+	ws->io.lews_utf8_min = 0x80;
+	ws->io.lews_utf8_max = 0xbf;
+}
+
+static bool lews_bqws_utf8_stream_feed(
+	bqws_socket *ws,
+	const uint8_t *s,
+	size_t n
+)
+{
+	for (size_t i = 0; i < n; i++) {
+		uint8_t c = s[i];
+
+		if (ws->io.lews_utf8_remaining != 0) {
+			if (c < ws->io.lews_utf8_min || c > ws->io.lews_utf8_max) {
+				return false;
+			}
+
+			ws->io.lews_utf8_remaining--;
+			ws->io.lews_utf8_min = 0x80;
+			ws->io.lews_utf8_max = 0xbf;
+			continue;
+		}
+
+		if (c <= 0x7f) {
+			continue;
+		}
+		if (c >= 0xc2 && c <= 0xdf) {
+			ws->io.lews_utf8_remaining = 1;
+			continue;
+		}
+		if (c == 0xe0) {
+			ws->io.lews_utf8_remaining = 2;
+			ws->io.lews_utf8_min = 0xa0;
+			continue;
+		}
+		if ((c >= 0xe1 && c <= 0xec) || (c >= 0xee && c <= 0xef)) {
+			ws->io.lews_utf8_remaining = 2;
+			continue;
+		}
+		if (c == 0xed) {
+			ws->io.lews_utf8_remaining = 2;
+			ws->io.lews_utf8_max = 0x9f;
+			continue;
+		}
+		if (c == 0xf0) {
+			ws->io.lews_utf8_remaining = 3;
+			ws->io.lews_utf8_min = 0x90;
+			continue;
+		}
+		if (c >= 0xf1 && c <= 0xf3) {
+			ws->io.lews_utf8_remaining = 3;
+			continue;
+		}
+		if (c == 0xf4) {
+			ws->io.lews_utf8_remaining = 3;
+			ws->io.lews_utf8_max = 0x8f;
+			continue;
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+static bool lews_bqws_utf8_stream_complete(const bqws_socket *ws)
+{
+	return ws->io.lews_utf8_remaining == 0;
+}
+
 static bool lews_bqws_valid_utf8(const uint8_t *s, size_t n)
 {
 	size_t i = 0;
@@ -2005,6 +2087,9 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 		} else if (opcode == 0x1 || opcode == 0x2) {
 			// Text or Binary
 			type = opcode == 0x1 ? BQWS_MSG_TEXT : BQWS_MSG_BINARY;
+			if (opcode == 0x1) {
+				lews_bqws_utf8_stream_reset(ws);
+			}
 
 			// A new data message cannot begin until the current fragmented
 			// message has received its final continuation frame.
@@ -2089,6 +2174,31 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 	}
 
 	bqws_assert(buf->offset == msg->msg.size);
+
+	// Validate RFC 3629 text as each unmasked frame arrives so invalid
+	// fragmented text fails at the first fragment that proves invalidity.
+	// The state intentionally survives continuation frames.
+	bqws_msg_type recv_type = msg->msg.type;
+	bqws_msg_type recv_base_type =
+		(bqws_msg_type)(recv_type & BQWS_MSG_TYPE_MASK);
+	if (recv_base_type == BQWS_MSG_TEXT) {
+		if (!lews_bqws_utf8_stream_feed(
+				ws,
+				(const uint8_t *)msg->msg.data,
+				msg->msg.size)) {
+			ws_fail(ws, BQWS_ERR_BAD_UTF8);
+			return false;
+		}
+
+		if ((recv_type & BQWS_MSG_PARTIAL_BIT) == 0
+			|| (recv_type & BQWS_MSG_FINAL_BIT) != 0) {
+			if (!lews_bqws_utf8_stream_complete(ws)) {
+				ws_fail(ws, BQWS_ERR_BAD_UTF8);
+				return false;
+			}
+			lews_bqws_utf8_stream_reset(ws);
+		}
+	}
 
 	// Peek at all incoming messages before processing
 	if (ws->peek_fn) {
