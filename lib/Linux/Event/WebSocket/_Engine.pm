@@ -113,7 +113,13 @@ sub start_close ($self, $code, $reason = '') {
 sub _failure_message ($error, $name) {
     return 'WebSocket message exceeds configured limit'
         if $name eq 'LIMIT_MAX_RECV_MSG_SIZE';
-    return 'invalid UTF-8 in WebSocket frame'
+    return 'WebSocket continuation frame received outside a fragmented message'
+        if $name eq 'BAD_CONTINUATION';
+    return 'WebSocket data frame received while a fragmented message is unfinished'
+        if $name eq 'UNFINISHED_PARTIAL';
+    return 'WebSocket close frame has a one-byte payload or invalid status code'
+        if $name eq 'BAD_CLOSE';
+    return 'WebSocket close frame contains invalid UTF-8 reason'
         if $name eq 'BAD_UTF8';
     return "WebSocket protocol error ($name)";
 }
@@ -136,6 +142,11 @@ sub _fail ($self, $message, $code, $native_has_close = 0) {
 
 sub _deliver ($self, $opcode, $payload, $connection) {
     return 0 if $self->{failed} || $self->{received_close};
+
+    if (length($payload) > $self->{max_message_size}) {
+        $self->_fail('WebSocket message exceeds configured limit', 1009);
+        return 0;
+    }
 
     my $type;
     if ($opcode == 1) {
