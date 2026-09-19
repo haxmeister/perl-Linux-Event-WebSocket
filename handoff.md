@@ -7,6 +7,65 @@
 Development version: `0.001_001`. No CPAN release has been made.
 
 
+### Broadcast / fan-out benchmark
+
+Branch: `experiment/bq-broadcast-fanout`. Draft PR: #8.
+
+This benchmark exercises a common pub/sub pattern rather than echo behavior.
+One producer WebSocket sends a mixed JSON/emoji event to the server. The
+server broadcasts that event to every subscriber. A broadcast is counted
+complete only after every subscriber has received it; only then does the
+producer send the next event.
+
+The benchmark compares current main, the wslay experiment, and the optimized
+bq path on the same runner. It reports broadcasts/sec and aggregate
+deliveries/sec.
+
+Two-round averages on an AMD EPYC 9V45:
+
+256-byte mixed JSON/emoji:
+
+- fan-out 10: main 3.27k broadcasts/s (32.7k deliveries/s),
+  wslay 4.34k (43.4k/s), bq 5.75k (57.5k/s);
+- fan-out 100: main 356 broadcasts/s (35.6k deliveries/s),
+  wslay 469 (46.9k/s), bq 615 (61.5k/s);
+- fan-out 1000: main 23.8 broadcasts/s (23.8k deliveries/s),
+  wslay 26.1 (26.1k/s), bq 31.6 (31.6k/s).
+
+1 KiB mixed JSON/emoji:
+
+- fan-out 10: main 1.62k broadcasts/s (16.2k deliveries/s),
+  wslay 2.50k (25.0k/s), bq 5.40k (54.0k/s);
+- fan-out 100: main 169 broadcasts/s (16.9k deliveries/s),
+  wslay 270 (27.0k/s), bq 566 (56.6k/s);
+- fan-out 1000: main 13.3 broadcasts/s (13.3k deliveries/s),
+  wslay 18.5 (18.5k/s), bq 29.5 (29.5k/s).
+
+16 KiB mixed JSON/emoji:
+
+- fan-out 10: main 139 broadcasts/s (1.39k deliveries/s),
+  wslay 263 (2.63k/s), bq 2.19k (21.9k/s);
+- fan-out 100: main 14.9 broadcasts/s (1.49k deliveries/s),
+  wslay 27.0 (2.70k/s), bq 206 (20.6k/s).
+
+The 16 KiB / 1000-peer case is intentionally omitted so the test remains a
+WebSocket fan-out benchmark rather than primarily a memory-pressure benchmark.
+
+Key conclusions:
+
+- bq remains the strongest engine under realistic server fan-out.
+- At fan-out 10-100, bq aggregate delivery throughput is nearly flat as fan-out
+  increases, especially at 1 KiB and 16 KiB.
+- At 1000 subscribers, all three engines lose aggregate delivery throughput,
+  indicating that broader event-loop/socket scheduling and connection-count
+  costs are becoming significant. bq still leads, but the relative gap narrows.
+- For 1 KiB fan-out 10-100, bq delivers roughly 2.1x wslay and 3.3x main.
+- For 16 KiB fan-out 10-100, bq delivers roughly 7.6-8.3x wslay and
+  13.9-15.8x main.
+- The result is end-to-end: producer receive, server broadcast writes, client
+  receive parsing/validation, and loop scheduling are all included. No
+  echo-specific or payload-reuse optimization is present.
+
 ### Realistic modern Unicode benchmark
 
 Branch: `experiment/bq-realistic-unicode`. Draft PR: #7.
