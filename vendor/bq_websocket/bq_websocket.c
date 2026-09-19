@@ -1037,6 +1037,30 @@ static void mask_apply(void *data, size_t size, uint32_t mask)
 			left--;
 		}
 	}
+
+static void mask_apply_offset(
+	void *data,
+	size_t size,
+	uint32_t mask,
+	size_t offset
+)
+{
+	size_t shift = offset & 3u;
+	if (shift == 0) {
+		mask_apply(data, size, mask);
+		return;
+	}
+
+	uint8_t in[4], out[4];
+	uint32_t rotated;
+	memcpy(in, &mask, 4);
+	for (size_t i = 0; i < 4; i++) {
+		out[i] = in[(i + shift) & 3u];
+	}
+	memcpy(&rotated, out, 4);
+	mask_apply(data, size, rotated);
+}
+
 }
 
 // -- Handshake
@@ -1600,6 +1624,11 @@ static bool lews_bqws_utf8_stream_complete(const bqws_socket *ws)
 	return ws->io.lews_utf8_remaining == 0;
 }
 
+static bool lews_bqws_is_text_type(bqws_msg_type type)
+{
+	return (type & BQWS_MSG_TYPE_MASK) == BQWS_MSG_TEXT;
+}
+
 static bool lews_bqws_valid_utf8(const uint8_t *s, size_t n)
 {
 	size_t i = 0;
@@ -2134,6 +2163,24 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			size_t to_copy = left;
 			if (to_copy > imp->msg.size) to_copy = imp->msg.size;
 			memcpy(imp->msg.data, ws->io.recv_header + offset, to_copy);
+
+			if (to_copy > 0 && lews_bqws_is_text_type(imp->msg.type)) {
+				if (buf->masked) {
+					mask_apply_offset(
+						imp->msg.data,
+						to_copy,
+						buf->mask_key,
+						0);
+				}
+				if (!lews_bqws_utf8_stream_feed(
+						ws,
+						(const uint8_t *)imp->msg.data,
+						to_copy)) {
+					ws_fail(ws, BQWS_ERR_BAD_UTF8);
+					return false;
+				}
+			}
+
 			buf->offset += to_copy;
 			offset += to_copy;
 			left -= to_copy;
@@ -2153,7 +2200,8 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 	if (msg->msg.size > 0 && buf->offset < msg->msg.size) {
 
 		size_t to_read = msg->msg.size - buf->offset;
-		size_t num_read = recv_fn(user, ws, msg->msg.data + buf->offset, to_read, to_read);
+		size_t chunk_offset = buf->offset;
+		size_t num_read = recv_fn(user, ws, msg->msg.data + chunk_offset, to_read, to_read);
 		if (num_read == 0) return false;
 		if (num_read == SIZE_MAX) {
 			ws_fail(ws, BQWS_ERR_IO_READ);
@@ -2165,39 +2213,44 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			ws->io.last_read_ts = bqws_get_timestamp();
 		}
 
+		if (num_read > 0 && lews_bqws_is_text_type(msg->msg.type)) {
+			if (buf->masked) {
+				mask_apply_offset(
+					msg->msg.data + chunk_offset,
+					num_read,
+					buf->mask_key,
+					chunk_offset);
+			}
+			if (!lews_bqws_utf8_stream_feed(
+					ws,
+					(const uint8_t *)msg->msg.data + chunk_offset,
+					num_read)) {
+				ws_fail(ws, BQWS_ERR_BAD_UTF8);
+				return false;
+			}
+		}
+
 		buf->offset += num_read;
 		if (num_read < to_read) return false;
 	}
 
-	if (buf->masked) {
+	if (buf->masked && !lews_bqws_is_text_type(msg->msg.type)) {
 		mask_apply(msg->msg.data, msg->msg.size, buf->mask_key);
 	}
 
 	bqws_assert(buf->offset == msg->msg.size);
 
-	// Validate RFC 3629 text as each unmasked frame arrives so invalid
-	// fragmented text fails at the first fragment that proves invalidity.
-	// The state intentionally survives continuation frames.
+	// Text bytes were unmasked and validated incrementally as they arrived.
+	// At a logical message boundary, an unfinished UTF-8 sequence is invalid.
 	bqws_msg_type recv_type = msg->msg.type;
-	bqws_msg_type recv_base_type =
-		(bqws_msg_type)(recv_type & BQWS_MSG_TYPE_MASK);
-	if (recv_base_type == BQWS_MSG_TEXT) {
-		if (!lews_bqws_utf8_stream_feed(
-				ws,
-				(const uint8_t *)msg->msg.data,
-				msg->msg.size)) {
+	if (lews_bqws_is_text_type(recv_type)
+		&& ((recv_type & BQWS_MSG_PARTIAL_BIT) == 0
+			|| (recv_type & BQWS_MSG_FINAL_BIT) != 0)) {
+		if (!lews_bqws_utf8_stream_complete(ws)) {
 			ws_fail(ws, BQWS_ERR_BAD_UTF8);
 			return false;
 		}
-
-		if ((recv_type & BQWS_MSG_PARTIAL_BIT) == 0
-			|| (recv_type & BQWS_MSG_FINAL_BIT) != 0) {
-			if (!lews_bqws_utf8_stream_complete(ws)) {
-				ws_fail(ws, BQWS_ERR_BAD_UTF8);
-				return false;
-			}
-			lews_bqws_utf8_stream_reset(ws);
-		}
+		lews_bqws_utf8_stream_reset(ws);
 	}
 
 	// Peek at all incoming messages before processing
