@@ -1,0 +1,116 @@
+name: bq native send_text evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+      - 't/03-engine.t'
+      - 'bench/one-way.pl'
+      - '.github/workflows/bq-native-send-text.yml'
+
+concurrency:
+  group: bq-native-send-text-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  send-text-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout native send_text experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build native send_text experiment
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build Perl send_text baseline
+        run: |
+          git clone --depth 1 --branch experiment/bq-perlapi-utf8 \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-perl-send
+          (
+            cd /tmp/websocket-perl-send
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            echo "perl_send_commit=$(git -C /tmp/websocket-perl-send rev-parse HEAD)"
+            echo "native_send_commit=$(git rev-parse HEAD)"
+          } | tee bq-native-send-text-environment.txt
+
+      - name: Run one-way comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > bq-native-send-text.txt
+
+          baseline="/tmp/websocket-perl-send/blib/lib:/tmp/websocket-perl-send/blib/arch"
+          native="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-12s ' "$label" | tee -a bq-native-send-text.txt
+            PERL5LIB="$lib:${PERL5LIB:-}" \
+              perl bench/one-way.pl "$@" \
+              | tee -a bq-native-send-text.txt
+          }
+
+          for round in 1 2; do
+            echo "round=$round" | tee -a bq-native-send-text.txt
+            case_no=0
+
+            for direction in c2s s2c; do
+              for type in binary text; do
+                for bytes in 64 1024 16384; do
+                  args=(--direction "$direction" --type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                  if (( (case_no + round) % 2 )); then
+                    run_one perl-send "$baseline" "${args[@]}"
+                    run_one native-send "$native" "${args[@]}"
+                  else
+                    run_one native-send "$native" "${args[@]}"
+                    run_one perl-send "$baseline" "${args[@]}"
+                  fi
+                  case_no=$((case_no + 1))
+                done
+              done
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bq-native-send-text
+          path: |
+            bq-native-send-text-environment.txt
+            bq-native-send-text.txt
