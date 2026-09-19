@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/benchmark.yml'
       - 'bench/**'
+      - 'WebSocket.xs'
+      - 'vendor/bq_websocket/**'
       - 'lib/Linux/Event/WebSocket/**'
 
 concurrency:
@@ -46,6 +48,9 @@ jobs:
           perl Makefile.PL
           make
 
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
+
       - name: Record environment
         run: |
           {
@@ -59,7 +64,7 @@ jobs:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/protocol.pl | tee benchmark-protocol.txt
 
-      - name: Pure-Perl optimization candidates
+      - name: Historical Perl optimization candidates
         env:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/candidates.pl | tee benchmark-candidates.txt
