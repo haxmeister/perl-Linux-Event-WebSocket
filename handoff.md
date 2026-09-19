@@ -6,6 +6,48 @@
 
 Development version: `0.001_001`. No CPAN release has been made.
 
+
+### Active bq_websocket experiment
+
+Branch: `experiment/bq-websocket-engine`. Draft PR: #2.
+
+This branch starts from main commit `cb3b2fc5` and does not modify main.
+It vendors the MIT/public-domain bq_websocket protocol core under
+`vendor/bq_websocket/`. The upstream platform/socket implementation is not
+used. Linux::Event continues to own the Stream, epoll, TLS, HTTP Upgrade,
+connection lifecycle, and the public Perl API.
+
+The private Engine routes framing through a thin XS adapter using
+`bqws_read_from()` / `bqws_write_to()`. The vendored core is compiled
+single-threaded because each WebSocket connection remains owned by the
+Linux::Event loop.
+
+Local experiment corrections currently include:
+
+- Linux::Event-compatible buffer I/O rather than bq's platform layer;
+- unlimited partial-message part count subject to the existing message-size limit;
+- incremental consumption when bq consumes only part of a Stream input chunk;
+- RFC 6455 rejection of control frames larger than 125 octets before processing;
+- retaining a Pong response for every Ping instead of upstream's latest-Pong-only policy;
+- existing Linux::Event::WebSocket close-code and UTF-8 behavior at the Perl-facing boundary.
+
+Normal CI is green on Perl 5.36 and 5.44. Autobahn client and server are both
+green across the 301 selected non-compression cases with zero conformance
+failures: 287 OK, 11 NON-STRICT, 3 INFORMATIONAL; close behavior is 298 OK
+and 3 INFORMATIONAL.
+
+The first three-way same-run benchmark before the final correctness fixes showed
+bq materially outperforming both current main and wslay on most workloads,
+including the large-message cases where wslay regresses. Representative rates
+on an AMD EPYC 7763 runner were about 92k/s binary 64 B, 82k/s binary 1 KiB,
+15-17k/s binary 16 KiB, 64-65k/s text 64 B, 59-60k/s text 1 KiB, and
+17.7-17.9k/s text 16 KiB. A fresh benchmark run after the correctness fixes is
+the current performance gate.
+
+Do not merge this experiment solely from the early performance result. Preserve
+Autobahn correctness, compare the completed post-fix benchmark against main and
+wslay, and review the maintenance cost of carrying the small vendored C library.
+
 Do not modify Linux::Event core, Linux::Event::HTTP, Uniform::HTTP, or another
 repository unless the user explicitly authorizes it.
 
