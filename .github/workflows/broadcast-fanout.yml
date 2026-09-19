@@ -1,0 +1,158 @@
+name: WebSocket broadcast fan-out evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'bench/broadcast-fanout.pl'
+      - '.github/workflows/broadcast-fanout.yml'
+      - 'WebSocket.xs'
+      - 'lib/Linux/Event/WebSocket/**'
+
+concurrency:
+  group: broadcast-fanout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fanout:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout optimized bq experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Raise file descriptor limit
+        run: |
+          ulimit -n 65536
+          ulimit -n
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwslay-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build optimized bq
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build current main
+        run: |
+          git clone --depth 1 --branch main \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-main
+          (
+            cd /tmp/websocket-main
+            perl Makefile.PL
+            make
+          )
+
+      - name: Build wslay experiment
+        run: |
+          git clone --depth 1 --branch experiment/wslay-engine \
+            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
+            /tmp/websocket-wslay
+          (
+            cd /tmp/websocket-wslay
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            ulimit -n
+            echo "perl=$(perl -e 'print $^V')"
+            echo "main_commit=$(git -C /tmp/websocket-main rev-parse HEAD)"
+            echo "wslay_commit=$(git -C /tmp/websocket-wslay rev-parse HEAD)"
+            echo "bq_commit=$(git rev-parse HEAD)"
+          } | tee broadcast-fanout-environment.txt
+
+      - name: Run fan-out comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -n 65536
+          : > broadcast-fanout.txt
+
+          main="/tmp/websocket-main/blib/lib:/tmp/websocket-main/blib/arch"
+          wslay="/tmp/websocket-wslay/blib/lib:/tmp/websocket-wslay/blib/arch"
+          bq="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-7s ' "$label" | tee -a broadcast-fanout.txt
+            PERL5LIB="$lib:${PERL5LIB:-}" \
+              perl bench/broadcast-fanout.pl "$@" \
+              | tee -a broadcast-fanout.txt
+          }
+
+          run_case() {
+            local slot="$1"
+            shift
+            case "$slot" in
+              0)
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                ;;
+              1)
+                run_one wslay "$wslay" "$@"
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                ;;
+              2)
+                run_one bq "$bq" "$@"
+                run_one main "$main" "$@"
+                run_one wslay "$wslay" "$@"
+                ;;
+            esac
+          }
+
+          case_no=0
+          for round in 1 2; do
+            echo "round=$round" | tee -a broadcast-fanout.txt
+
+            for bytes in 256 1024; do
+              for fanout in 10 100 1000; do
+                args=(--bytes "$bytes" --fanout "$fanout" --seconds 1.5 --warmup 0.4)
+                run_case $(( (case_no + round) % 3 )) "${args[@]}"
+                case_no=$((case_no + 1))
+              done
+            done
+
+            # Large application messages are useful at moderate fan-out,
+            # but avoid turning the 1000-peer case into a 16 MiB/broadcast
+            # memory-pressure benchmark.
+            for fanout in 10 100; do
+              args=(--bytes 16384 --fanout "$fanout" --seconds 1.5 --warmup 0.4)
+              run_case $(( (case_no + round) % 3 )) "${args[@]}"
+              case_no=$((case_no + 1))
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: broadcast-fanout
+          path: |
+            broadcast-fanout-environment.txt
+            broadcast-fanout.txt
