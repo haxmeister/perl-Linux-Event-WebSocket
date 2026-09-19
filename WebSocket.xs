@@ -17,6 +17,7 @@ typedef struct {
     SV *callback_target;
     SV *callback_error;
     int in_recv;
+    int forced_failure_code;
 } lews_wslay;
 
 static lews_wslay *
@@ -85,6 +86,20 @@ lews_genmask_callback(wslay_event_context_ptr ctx, uint8_t *buf, size_t len,
         return -1;
     }
     return 0;
+}
+
+static void
+lews_on_frame_recv_start_callback(
+    wslay_event_context_ptr ctx,
+    const struct wslay_event_on_frame_recv_start_arg *arg,
+    void *user_data)
+{
+    lews_wslay *state = (lews_wslay *)user_data;
+
+    if (arg->opcode == WSLAY_CONNECTION_CLOSE && arg->payload_length == 1) {
+        state->forced_failure_code = WSLAY_CODE_PROTOCOL_ERROR;
+        wslay_event_shutdown_read(ctx);
+    }
 }
 
 static void
@@ -178,6 +193,8 @@ CODE:
     Zero(&callbacks, 1, struct wslay_event_callbacks);
     callbacks.recv_callback = lews_recv_callback;
     callbacks.send_callback = lews_send_callback;
+    callbacks.on_frame_recv_start_callback =
+        lews_on_frame_recv_start_callback;
     callbacks.on_msg_recv_callback = lews_on_msg_recv_callback;
 
     if (strEQ(endpoint_type, "client")) {
@@ -222,6 +239,7 @@ PPCODE:
     state->input_len = (size_t)len;
     state->input_pos = 0;
     state->callback_target = callback_target;
+    state->forced_failure_code = 0;
     state->in_recv = 1;
 
     rc = wslay_event_recv(state->ctx);
@@ -241,11 +259,28 @@ PPCODE:
         croak("wslay_event_recv failed with code %d", rc);
     }
 
+    if (state->forced_failure_code) {
+        rc = wslay_event_queue_close(
+            state->ctx,
+            (uint16_t)state->forced_failure_code,
+            NULL,
+            0
+        );
+        if (rc < 0 && rc != WSLAY_ERR_NO_MORE_MSG) {
+            croak("wslay_event_queue_close failed with code %d", rc);
+        }
+    }
+
     output = lews_flush(state);
 
-    if (!wslay_event_get_read_enabled(state->ctx) &&
-        !wslay_event_get_close_received(state->ctx)) {
-        failure_code = (int)wslay_event_get_status_code_sent(state->ctx);
+    if (state->forced_failure_code) {
+        failure_code = state->forced_failure_code;
+    } else if (!wslay_event_get_read_enabled(state->ctx) &&
+               !wslay_event_get_close_received(state->ctx)) {
+        int status_code = (int)wslay_event_get_status_code_sent(state->ctx);
+        if (status_code != WSLAY_CODE_ABNORMAL_CLOSURE) {
+            failure_code = status_code;
+        }
     }
 
     EXTEND(SP, 2);
