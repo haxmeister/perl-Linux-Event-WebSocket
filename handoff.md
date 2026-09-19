@@ -7,6 +7,40 @@
 Development version: `0.001_001`. No CPAN release has been made.
 
 
+### bq Perl C API UTF-8 measurement
+
+Branch: `experiment/bq-perlapi-utf8`. Draft PR: #5.
+
+This experiment keeps the direct XS delivery path but replaces Perl-level
+inbound text decoding with Perl's C UTF-8 API. ASCII is detected with
+`is_utf8_invariant_string_loc()`; non-ASCII is validated with
+`is_utf8_string_flags(..., UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE)`. This
+matches RFC 3629 while continuing to allow Unicode noncharacters.
+
+Normal tests are green on Perl 5.36 and 5.44 and both Autobahn directions are
+green.
+
+A two-round one-way benchmark on an AMD EPYC 9V74 compared Perl-level
+validation, the hand-written C validator, and the Perl C API validator.
+Average text-message rates:
+
+- client -> server, 64 B: Perl 88.3k/s, hand C 99.9k/s, Perl C API 99.6k/s;
+- client -> server, 1 KiB: Perl 80.9k/s, hand C 82.2k/s, Perl C API 89.5k/s;
+- client -> server, 16 KiB: Perl 33.7k/s, hand C 22.0k/s, Perl C API 37.0k/s;
+- server -> client, 64 B: Perl 96.0k/s, hand C 109.2k/s, Perl C API 109.2k/s;
+- server -> client, 1 KiB: Perl 87.6k/s, hand C 88.8k/s, Perl C API 98.1k/s;
+- server -> client, 16 KiB: Perl 35.4k/s, hand C 22.4k/s, Perl C API 38.5k/s.
+
+The Perl C API path improves over Perl-level validation by about 8.6-13.8%
+across every tested text size and direction while leaving binary throughput
+essentially unchanged. It also avoids the hand-written validator's severe
+large-message regression. This is the preferred inbound UTF-8 implementation
+from the experiments so far.
+
+The next isolated target is outbound `send_text` validation/encoding. Do not
+special-case echo traffic; measure outbound work independently on the one-way
+benchmark.
+
 ### bq integration hot-path measurement
 
 Branch: `experiment/bq-integration-hotpath`. Draft PR: #3. This branch is
