@@ -292,18 +292,25 @@ PPCODE:
     data = SvPVbyte(bytes, len);
     used = 0;
 
-    while (used < (size_t)len) {
-        size_t n = lews_bq_read_until_message(
-            state->ws,
-            data + used,
-            (size_t)len - used
-        );
+    for (;;) {
+        size_t remaining;
+        size_t n;
+        int had_messages;
 
-        if (n == 0) {
+        if (used >= (size_t)len
+            && state->ws->io.recv_buf.header_offset == 0) {
             break;
         }
+
+        remaining = (size_t)len - used;
+        n = lews_bq_read_until_message(
+            state->ws,
+            data + used,
+            remaining
+        );
         used += n;
 
+        had_messages = state->ws->recv_queue.num_messages != 0;
         callback_error = lews_bq_drain_events(
             state, callback_target, connection
         );
@@ -315,13 +322,10 @@ PPCODE:
             || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING) {
             break;
         }
-    }
 
-    callback_error = lews_bq_drain_events(
-        state, callback_target, connection
-    );
-    if (callback_error != NULL) {
-        croak_sv(callback_error);
+        if (n == 0 && !had_messages) {
+            break;
+        }
     }
 
     error = bqws_get_error(state->ws);
