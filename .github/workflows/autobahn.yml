@@ -8,6 +8,7 @@ on:
       - 'Makefile.PL'
       - 'vendor/bq_websocket/**'
       - 'lib/Linux/Event/WebSocket/**'
+      - 'xt/autobahn/**'
       - '.github/workflows/autobahn.yml'
   push:
     branches: [ main ]
