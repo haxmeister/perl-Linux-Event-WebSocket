@@ -54,6 +54,7 @@ my $elapsed;
 my $stopping = 0;
 my $started_traffic = 0;
 my $guard;
+my $server;
 
 sub send_one ($ws) {
     if ($type eq 'text') {
@@ -122,7 +123,7 @@ sub maybe_start_traffic () {
     return;
 }
 
-my $server = Linux::Event::WebSocket::Server->new(
+$server = Linux::Event::WebSocket::Server->new(
     loop => $loop,
     host => '127.0.0.1',
     port => 0,
