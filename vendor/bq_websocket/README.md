@@ -22,6 +22,8 @@ policy and Linux-only runtime:
   effects can occur;
 - every received Ping retains its own Pong response instead of keeping only the
   latest pending Pong;
+- complete messages queued before a later parse error in the same transport
+  read remain available for delivery instead of being discarded by the error;
 - when control messages are exposed, a received Close is copied before the
   original object is retained for automatic echo.
 
