@@ -5,7 +5,7 @@ callback-first API.
 
 ## Status
 
-Development version: `0.001_001`.
+Development version: `0.001_002`.
 
 The distribution now has working `ws://` and `wss://` client/server paths and a
 real production test suite. It has not yet been released to CPAN and the public
@@ -167,10 +167,19 @@ in the connection design.
 
 ## Protocol engine
 
-The RFC 6455 engine is implemented by private modules in this distribution.
-It incrementally parses frames, enforces endpoint masking rules, reassembles
-fragmented messages, validates UTF-8, and handles control and close frames.
-Client handshake keys and frame masks come from `/dev/urandom`.
+The production RFC 6455 data engine is native code kept behind private modules.
+A small, vendored copy of `bq_websocket` performs framing, masking,
+fragmentation, message assembly, and control-frame processing. A thin XS
+adapter connects it to Linux::Event's existing Stream; bq does not own the
+socket, TLS, HTTP Upgrade, timers, or event loop.
+
+Inbound and outbound text use Perl's C UTF-8 API from XS to enforce the RFC
+3629 boundary without a Perl-level validation pass. Client frame masks use
+Linux `getrandom(2)`. The opening HTTP handshake remains entirely owned by
+Linux::Event::HTTP and this distribution's handshake policy.
+
+The older private `_Frame` and `_Parser` helpers remain useful for tests and
+developer benchmarks, but they are not the production data-path parser.
 
 ## Protocol policy
 
@@ -186,13 +195,21 @@ transport-neutral parser, including:
 
 ## Native-code policy
 
-The initial implementation intentionally has no WebSocket-specific XS.
+Measured end-to-end, Unicode, concurrency, and broadcast workloads justified a
+WebSocket-specific native engine in this distribution. The native code stays
+here rather than in Linux::Event core because RFC 6455 framing and policy are
+WebSocket-specific.
 
-If benchmarks later show that parsing or masking is a material bottleneck,
-WebSocket-specific native code belongs in this distribution. Linux::Event core
-should change only when a reusable facility would benefit multiple protocol
-distributions. A WebSocket-specific built-in core framer is not currently
-planned.
+The vendored engine is intentionally transport-neutral in this integration:
+Linux::Event continues to own epoll, sockets, TLS, buffering, backpressure, and
+lifecycle. No external bq system library is required.
 
-See `docs/ARCHITECTURE.md` for the detailed design and `handoff.md` for the
-current development state and next work.
+The vendored bq source is based on upstream commit
+`6c188d3f0edca38d7a8926e0d30f4c145414ba4c` and is carried under the MIT
+license. Linux::Event-specific fixes are documented in
+`vendor/bq_websocket/README.md`; the full third-party license text is in
+`vendor/bq_websocket/LICENSE`.
+
+See `docs/ARCHITECTURE.md` for the detailed design, `docs/BENCHMARKS.md`
+for the measurement rationale, and `handoff.md` for the current development
+state.
