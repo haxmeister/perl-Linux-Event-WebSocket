@@ -47,10 +47,10 @@ Repository author benchmarks live under `bench/`.
 The first baseline was taken on Perl 5.44 on an Ubuntu GitHub runner using an
 AMD EPYC 7763-class host.
 
-## Bottleneck 1: client mask randomness
+## Historical Bottleneck 1: client mask randomness
 
-The original implementation opened, read, and closed `/dev/urandom` for every
-client frame.
+The original pure-Perl implementation opened, read, and closed `/dev/urandom`
+for every client frame.
 
 A same-run microbenchmark measured approximately:
 
@@ -61,10 +61,11 @@ A same-run microbenchmark measured approximately:
 | 1 KiB masked frame encode | 86k/s | 239k/s |
 | 16 KiB masked frame encode | 43k/s | 70k/s |
 
-The production implementation now keeps one lazy, close-on-exec
-`/dev/urandom` descriptor and reuses it. No native code was required.
+The pure-Perl implementation was improved by keeping one lazy, close-on-exec
+`/dev/urandom` descriptor. The current native engine supersedes that path and
+uses Linux `getrandom(2)` for client mask keys.
 
-## Bottleneck 2: UTF-8 validation
+## Historical Bottleneck 2: UTF-8 validation
 
 The first RFC 3629 validator walked every byte in Perl. That was correct but
 became the dominant cost for text messages.
@@ -77,19 +78,14 @@ Representative original validation rates were approximately:
 | 1 KiB | 10k/s |
 | 16 KiB | 655/s |
 
-A full RFC regular expression did not scale well enough. The chosen production
-path instead:
+A full RFC regular expression did not scale well enough. The pure-Perl path was
+improved with an ASCII fast path plus C-backed decoding.
 
-1. uses a cheap C-regex ASCII fast path;
-2. uses Perl's C-backed `utf8::decode` for non-ASCII input;
-3. explicitly rejects surrogate values and values above U+10FFFF so Perl's
-   wider internal code-point range cannot loosen RFC 3629.
-
-After that change, a representative run measured production validation at about
-1.09M/s for 64-byte ASCII, 643k/s for 1 KiB, and 67k/s for 16 KiB.
-
-The normal test suite and both Autobahn client/server conformance runs remained
-green after the change.
+The current native engine supersedes that implementation. Inbound and outbound
+text now use Perl's C UTF-8 API directly from XS with the RFC 3629 boundary.
+That avoids a Perl-level validation/copy pass while preserving rejection of
+overlong encodings, surrogates, Perl-extended UTF-8, and values above
+U+10FFFF. Unicode noncharacters remain permitted.
 
 ## End-to-end effect
 
@@ -138,37 +134,38 @@ CPU 0 and the driver/peer to CPU 1. Go is constrained to `GOMAXPROCS=1`.
 Each case warms up for 0.5 seconds and measures for 1.5 seconds after the
 WebSocket handshake.
 
-A representative same-run server comparison on an AMD EPYC runner measured:
+A post-integration same-run server comparison from draft PR #9 measured:
 
 | case | Linux::Event | Mojolicious | Node ws | Gorilla |
 | --- | ---: | ---: | ---: | ---: |
-| binary 64 B, 1 conn | 32.9k | 38.4k | 146.6k | 166.1k |
-| binary 1 KiB, 1 conn | 30.7k | 35.3k | 132.6k | 142.3k |
-| binary 16 KiB, 1 conn | 21.1k | 17.1k | 61.3k | 39.3k |
-| binary 64 B, 100 conn | 32.5k | 32.1k | 139.2k | 145.0k |
-| text 64 B, 1 conn | 29.3k | 34.9k | 139.2k | 153.5k |
-| text 1 KiB, 1 conn | 25.8k | 31.3k | 124.1k | 126.5k |
-| text 16 KiB, 1 conn | 10.5k | 13.4k | 33.1k | 35.5k |
-| text 64 B, 100 conn | 28.9k | 29.7k | 127.2k | 130.5k |
+| binary 64 B, 1 conn | 147.7k | 43.9k | 168.1k | 192.0k |
+| binary 1 KiB, 1 conn | 132.2k | 40.1k | 154.1k | 165.3k |
+| binary 16 KiB, 1 conn | 39.2k | 19.0k | 72.9k | 45.1k |
+| binary 64 B, 100 conn | 123.4k | 37.2k | 160.8k | 166.0k |
+| text 64 B, 1 conn | 156.0k | 39.9k | 158.5k | 174.2k |
+| text 1 KiB, 1 conn | 138.6k | 35.2k | 142.8k | 143.6k |
+| text 16 KiB, 1 conn | 38.7k | 14.6k | 39.1k | 41.3k |
+| text 64 B, 100 conn | 125.1k | 33.5k | 146.3k | 146.2k |
 
 The mirror client comparison on the same runner measured:
 
 | case | Linux::Event | Mojolicious | Node ws | Gorilla |
 | --- | ---: | ---: | ---: | ---: |
-| binary 64 B, 1 conn | 29.9k | 42.8k | 151.1k | 160.2k |
-| binary 1 KiB, 1 conn | 28.1k | 39.7k | 137.2k | 135.6k |
-| binary 16 KiB, 1 conn | 20.7k | 22.7k | 58.1k | 25.6k |
-| binary 64 B, 100 conn | 29.3k | 38.3k | 138.6k | 144.1k |
-| text 64 B, 1 conn | 27.1k | 40.0k | 138.8k | 156.2k |
-| text 1 KiB, 1 conn | 24.3k | 36.7k | 124.9k | 136.4k |
-| text 16 KiB, 1 conn | 12.7k | 19.8k | 33.4k | 21.9k |
-| text 64 B, 100 conn | 26.6k | 36.0k | 127.9k | 140.8k |
+| binary 64 B, 1 conn | 133.8k | 47.9k | 170.6k | 184.4k |
+| binary 1 KiB, 1 conn | 126.5k | 45.1k | 157.8k | 157.0k |
+| binary 16 KiB, 1 conn | 40.2k | 25.4k | 72.6k | 25.9k |
+| binary 64 B, 100 conn | 113.0k | 43.6k | 159.9k | 159.8k |
+| text 64 B, 1 conn | 138.0k | 45.5k | 159.4k | 179.0k |
+| text 1 KiB, 1 conn | 126.1k | 41.5k | 141.4k | 155.6k |
+| text 16 KiB, 1 conn | 46.1k | 22.7k | 34.9k | 25.5k |
+| text 64 B, 100 conn | 114.6k | 40.5k | 145.9k | 158.0k |
 
-These tables record the pre-native baseline that motivated the later engine
-work. They are retained for history; they do not describe the current bq-backed
-production path. The integration branch reruns the same comparison before
-merge so the post-native numbers remain a same-run result rather than a
-cross-run inference.
+These are hosted-runner measurements and should not be interpreted as universal
+rankings. They do show that the integrated native path is no longer in the same
+performance regime as the earlier Perl implementation: server text throughput
+is close to Node/Gorilla in the tested 64 B through 16 KiB single-connection
+cases, and Linux::Event's 16 KiB text client exceeds both comparison clients in
+this run.
 
 ## Timer-fairness observation
 
