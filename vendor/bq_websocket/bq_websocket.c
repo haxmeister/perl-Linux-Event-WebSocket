@@ -575,7 +575,12 @@ static void ws_fail(bqws_socket *ws, bqws_error err)
 			case BQWS_ERR_PARTIAL_CONTROL:
 			case BQWS_ERR_BAD_OPCODE:
 			case BQWS_ERR_RESERVED_BIT:
+			case BQWS_ERR_BAD_CLOSE:
 				reason = BQWS_CLOSE_PROTOCOL_ERROR;
+				break;
+
+			case BQWS_ERR_BAD_UTF8:
+				reason = BQWS_CLOSE_BAD_DATA;
 				break;
 
 			default:
@@ -1506,12 +1511,97 @@ static void ws_enqueue_recv(bqws_socket *ws, bqws_msg_imp *msg)
 	msg_enqueue(&ws->recv_queue, msg);
 }
 
+static bool lews_bqws_valid_close_code(uint16_t code)
+{
+	return ((code >= 1000 && code <= 1014)
+		&& code != 1004 && code != 1005 && code != 1006)
+		|| (code >= 3000 && code <= 4999);
+}
+
+static bool lews_bqws_valid_utf8(const uint8_t *s, size_t n)
+{
+	size_t i = 0;
+	while (i < n) {
+		uint8_t a = s[i++];
+		if (a <= 0x7f) continue;
+		if (a >= 0xc2 && a <= 0xdf) {
+			if (i >= n || s[i] < 0x80 || s[i] > 0xbf) return false;
+			i++;
+			continue;
+		}
+		if (a == 0xe0) {
+			if (i + 1 >= n || s[i] < 0xa0 || s[i] > 0xbf
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf) return false;
+			i += 2;
+			continue;
+		}
+		if ((a >= 0xe1 && a <= 0xec) || (a >= 0xee && a <= 0xef)) {
+			if (i + 1 >= n || s[i] < 0x80 || s[i] > 0xbf
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf) return false;
+			i += 2;
+			continue;
+		}
+		if (a == 0xed) {
+			if (i + 1 >= n || s[i] < 0x80 || s[i] > 0x9f
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf) return false;
+			i += 2;
+			continue;
+		}
+		if (a == 0xf0) {
+			if (i + 2 >= n || s[i] < 0x90 || s[i] > 0xbf
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf
+				|| s[i + 2] < 0x80 || s[i + 2] > 0xbf) return false;
+			i += 3;
+			continue;
+		}
+		if (a >= 0xf1 && a <= 0xf3) {
+			if (i + 2 >= n || s[i] < 0x80 || s[i] > 0xbf
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf
+				|| s[i + 2] < 0x80 || s[i + 2] > 0xbf) return false;
+			i += 3;
+			continue;
+		}
+		if (a == 0xf4) {
+			if (i + 2 >= n || s[i] < 0x80 || s[i] > 0x8f
+				|| s[i + 1] < 0x80 || s[i + 1] > 0xbf
+				|| s[i + 2] < 0x80 || s[i + 2] > 0xbf) return false;
+			i += 3;
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
 static void ws_handle_control(bqws_socket *ws, bqws_msg_imp *msg)
 {
 	bqws_msg_type type = msg->msg.type;
 	bqws_msg_imp *msg_to_enqueue = msg;
 
 	if (type == BQWS_MSG_CONTROL_CLOSE) {
+
+		if (msg->msg.size == 1) {
+			msg_free_owned(ws, msg);
+			ws_fail(ws, BQWS_ERR_BAD_CLOSE);
+			return;
+		}
+		if (msg->msg.size >= 2) {
+			uint16_t code = (uint16_t)(
+				((uint16_t)(uint8_t)msg->msg.data[0] << 8)
+				| (uint16_t)(uint8_t)msg->msg.data[1]);
+			if (!lews_bqws_valid_close_code(code)) {
+				msg_free_owned(ws, msg);
+				ws_fail(ws, BQWS_ERR_BAD_CLOSE);
+				return;
+			}
+			if (!lews_bqws_valid_utf8(
+				(const uint8_t *)msg->msg.data + 2,
+				msg->msg.size - 2)) {
+				msg_free_owned(ws, msg);
+				ws_fail(ws, BQWS_ERR_BAD_UTF8);
+				return;
+			}
+		}
 
 		bqws_mutex_lock(&ws->state.mutex);
 
@@ -3398,6 +3488,8 @@ const char *bqws_error_str(bqws_error error)
 	case BQWS_ERR_PARTIAL_CONTROL: return "PARTIAL_CONTROL";
 	case BQWS_ERR_BAD_OPCODE: return "BAD_OPCODE";
 	case BQWS_ERR_RESERVED_BIT: return "RESERVED_BIT";
+	case BQWS_ERR_BAD_CLOSE: return "BAD_CLOSE";
+	case BQWS_ERR_BAD_UTF8: return "BAD_UTF8";
 	case BQWS_ERR_IO_WRITE: return "IO_WRITE";
 	case BQWS_ERR_IO_READ: return "IO_READ";
 	case BQWS_ERR_BAD_HANDSHAKE: return "BAD_HANDSHAKE";
