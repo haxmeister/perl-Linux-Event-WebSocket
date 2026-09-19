@@ -97,7 +97,15 @@ lews_on_frame_recv_start_callback(
     lews_wslay *state = (lews_wslay *)user_data;
 
     if (arg->opcode == WSLAY_CONNECTION_CLOSE && arg->payload_length == 1) {
-        state->forced_failure_code = WSLAY_CODE_PROTOCOL_ERROR;
+        int rc = wslay_event_queue_close(
+            ctx,
+            WSLAY_CODE_PROTOCOL_ERROR,
+            NULL,
+            0
+        );
+        if (rc == 0 || rc == WSLAY_ERR_NO_MORE_MSG) {
+            state->forced_failure_code = WSLAY_CODE_PROTOCOL_ERROR;
+        }
         wslay_event_shutdown_read(ctx);
     }
 }
@@ -112,7 +120,7 @@ lews_on_msg_recv_callback(wslay_event_context_ptr ctx,
     size_t payload_len = arg->msg_length;
     dSP;
 
-    if (state->callback_target == NULL) {
+    if (state->callback_target == NULL || state->forced_failure_code) {
         return;
     }
     if (arg->opcode != WSLAY_TEXT_FRAME &&
@@ -257,18 +265,6 @@ PPCODE:
     }
     if (rc < 0) {
         croak("wslay_event_recv failed with code %d", rc);
-    }
-
-    if (state->forced_failure_code) {
-        rc = wslay_event_queue_close(
-            state->ctx,
-            (uint16_t)state->forced_failure_code,
-            NULL,
-            0
-        );
-        if (rc < 0 && rc != WSLAY_ERR_NO_MORE_MSG) {
-            croak("wslay_event_queue_close failed with code %d", rc);
-        }
     }
 
     output = lews_flush(state);
