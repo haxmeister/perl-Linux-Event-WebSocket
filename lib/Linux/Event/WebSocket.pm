@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.001_001';
+our $VERSION = '0.001_002';
 
 1;
 
