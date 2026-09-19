@@ -1693,7 +1693,8 @@ static bool lews_bqws_is_text_type(bqws_msg_type type)
 
 static bool lews_bqws_msg_text_non_ascii(const bqws_msg *msg)
 {
-	return msg_imp(msg)->text_non_ascii;
+	bqws_msg_imp *imp = msg_imp(msg);
+	return imp->text_non_ascii;
 }
 
 static void ws_handle_control(bqws_socket *ws, bqws_msg_imp *msg)
