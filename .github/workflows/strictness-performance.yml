@@ -51,8 +51,10 @@ jobs:
             make
           )
 
-      - name: Add Unicode one-way benchmark
+      - name: Add benchmark scripts
         run: |
+          git fetch --depth 1 origin experiment/bq-native-send-text
+          git show FETCH_HEAD:bench/evaluate-engine.pl > /tmp/evaluate-engine.pl
           git fetch --depth 1 origin experiment/bq-realistic-unicode
           git show FETCH_HEAD:bench/unicode-one-way.pl > /tmp/unicode-one-way.pl
 
@@ -80,7 +82,7 @@ jobs:
             local lib="$2"
             shift 2
             printf '%-9s ' "$label" | tee -a strictness-performance.txt
-            PERL5LIB="$lib:${PERL5LIB:-}"               perl bench/evaluate-engine.pl "$@"               | tee -a strictness-performance.txt
+            PERL5LIB="$lib:${PERL5LIB:-}"               perl /tmp/evaluate-engine.pl "$@"               | tee -a strictness-performance.txt
           }
 
           run_unicode() {
