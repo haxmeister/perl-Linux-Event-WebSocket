@@ -156,6 +156,75 @@ lews_bq_call_event(
     return error;
 }
 
+
+static size_t
+lews_bq_read_until_message(bqws_socket *ws, const void *data, size_t size)
+{
+    bqws_mem_stream stream;
+    size_t queued_before;
+
+    bqws_mutex_lock(&ws->io.mutex);
+
+    stream.ptr = (char *)data;
+    stream.end = stream.ptr + size;
+    queued_before = ws->recv_queue.num_messages;
+
+    while (ws_read_data(ws, &mem_stream_recv, &stream)) {
+        if (ws->recv_queue.num_messages != queued_before) {
+            break;
+        }
+    }
+
+    bqws_mutex_unlock(&ws->io.mutex);
+
+    return (size_t)(stream.ptr - (char *)data);
+}
+
+static SV *
+lews_bq_drain_events(
+    lews_bq *state,
+    SV *callback_target,
+    SV *connection
+)
+{
+
+    while ((msg = bqws_recv(state->ws)) != NULL) {
+        SV *callback_error = NULL;
+
+        switch (msg->type) {
+        case BQWS_MSG_TEXT:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 1, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_BINARY:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 2, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_CLOSE:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 8, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_PING:
+        case BQWS_MSG_CONTROL_PONG:
+            break;
+        default:
+            bqws_free_msg(msg);
+            croak("unexpected bq_websocket message type %d", (int)msg->type);
+        }
+
+        bqws_free_msg(msg);
+
+        if (callback_error != NULL) {
+            return callback_error;
+        }
+    }
+
+    return NULL;
+}
+
 MODULE = Linux::Event::WebSocket    PACKAGE = Linux::Event::WebSocket::_BQ
 
 PROTOTYPES: DISABLE
@@ -221,54 +290,37 @@ PPCODE:
     state = lews_bq_from_sv(self);
     data = SvPVbyte(bytes, len);
     used = 0;
+
     while (used < (size_t)len) {
-        size_t n = bqws_read_from(
+        size_t n = lews_bq_read_until_message(
             state->ws,
             data + used,
             (size_t)len - used
         );
+
         if (n == 0) {
             break;
         }
         used += n;
+
+        callback_error = lews_bq_drain_events(
+            state, callback_target, connection
+        );
+        if (callback_error != NULL) {
+            croak_sv(callback_error);
+        }
+
         if (bqws_get_error(state->ws) != BQWS_OK
             || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING) {
             break;
         }
     }
 
-    while ((msg = bqws_recv(state->ws)) != NULL) {
-        callback_error = NULL;
-
-        switch (msg->type) {
-        case BQWS_MSG_TEXT:
-            callback_error = lews_bq_call_event(
-                callback_target, connection, 1, msg->data, msg->size
-            );
-            break;
-        case BQWS_MSG_BINARY:
-            callback_error = lews_bq_call_event(
-                callback_target, connection, 2, msg->data, msg->size
-            );
-            break;
-        case BQWS_MSG_CONTROL_CLOSE:
-            callback_error = lews_bq_call_event(
-                callback_target, connection, 8, msg->data, msg->size
-            );
-            break;
-        case BQWS_MSG_CONTROL_PING:
-        case BQWS_MSG_CONTROL_PONG:
-            break;
-        default:
-            bqws_free_msg(msg);
-            croak("unexpected bq_websocket message type %d", (int)msg->type);
-        }
-
-        bqws_free_msg(msg);
-
-        if (callback_error != NULL) {
-            croak_sv(callback_error);
-        }
+    callback_error = lews_bq_drain_events(
+        state, callback_target, connection
+    );
+    if (callback_error != NULL) {
+        croak_sv(callback_error);
     }
 
     error = bqws_get_error(state->ws);

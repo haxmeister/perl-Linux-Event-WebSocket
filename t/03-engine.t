@@ -120,6 +120,25 @@ sub output_close_code ($wire) {
         'engine replies to ping with an identical pong payload');
 }
 
+
+{
+    my ($engine, $connection) = server_engine();
+    my $bad = client_frame('text', 'bad');
+    substr($bad, 0, 1, chr(0x85));
+
+    $engine->feed(
+        client_frame('text', 'first')
+        . $bad
+    );
+
+    is_deeply($connection->{messages}, [ [ text => 'first' ] ],
+        'completed message is delivered before a later malformed frame');
+    like($connection->{errors}[0], qr/protocol|opcode/i,
+        'later malformed frame still reports a protocol error');
+    is(output_close_code($connection->{output}[-1]), 1002,
+        'later malformed frame still sends close 1002');
+}
+
 {
     my ($engine, $connection) = server_engine();
     $connection->{close_on_message} = 1;
