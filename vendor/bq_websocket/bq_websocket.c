@@ -459,9 +459,8 @@ struct bqws_socket {
 		size_t recv_partial_size;
 
 		// Linux::Event incremental RFC 3629 receive validation state.
-		uint8_t utf8_need;
-		uint8_t utf8_next_min;
-		uint8_t utf8_next_max;
+		uint8_t utf8_tail[3];
+		uint8_t utf8_tail_len;
 		bool utf8_non_ascii;
 
 		// Handshake
@@ -1599,91 +1598,163 @@ static bool lews_bqws_valid_utf8(const uint8_t *s, size_t n)
 
 static void lews_bqws_utf8_reset(bqws_socket *ws)
 {
-	ws->io.utf8_need = 0;
-	ws->io.utf8_next_min = 0x80;
-	ws->io.utf8_next_max = 0xbf;
+	ws->io.utf8_tail_len = 0;
 	ws->io.utf8_non_ascii = false;
 }
 
-static bool lews_bqws_utf8_consume_byte(bqws_socket *ws, uint8_t byte)
+static size_t lews_bqws_utf8_expected_len(uint8_t lead)
 {
-	if (byte > 0x7f) {
-		ws->io.utf8_non_ascii = true;
-	}
+	if (lead >= 0xc2 && lead <= 0xdf) return 2;
+	if (lead >= 0xe0 && lead <= 0xef) return 3;
+	if (lead >= 0xf0 && lead <= 0xf4) return 4;
+	return 0;
+}
 
-	if (ws->io.utf8_need != 0) {
-		if (byte < ws->io.utf8_next_min || byte > ws->io.utf8_next_max) {
+static bool lews_bqws_utf8_valid_incomplete_prefix(
+	const uint8_t *s,
+	size_t len)
+{
+	if (len == 0 || len > 3) return false;
+
+	size_t total = lews_bqws_utf8_expected_len(s[0]);
+	if (total == 0 || len >= total) return false;
+
+	if (len >= 2) {
+		uint8_t b = s[1];
+		if (s[0] == 0xe0) {
+			if (b < 0xa0 || b > 0xbf) return false;
+		} else if (s[0] == 0xed) {
+			if (b < 0x80 || b > 0x9f) return false;
+		} else if (s[0] == 0xf0) {
+			if (b < 0x90 || b > 0xbf) return false;
+		} else if (s[0] == 0xf4) {
+			if (b < 0x80 || b > 0x8f) return false;
+		} else if (b < 0x80 || b > 0xbf) {
 			return false;
 		}
-		ws->io.utf8_need--;
-		ws->io.utf8_next_min = 0x80;
-		ws->io.utf8_next_max = 0xbf;
-		return true;
 	}
 
-	if (byte <= 0x7f) return true;
-
-	if (byte >= 0xc2 && byte <= 0xdf) {
-		ws->io.utf8_need = 1;
-		ws->io.utf8_next_min = 0x80;
-		ws->io.utf8_next_max = 0xbf;
-		return true;
+	if (len >= 3 && (s[2] < 0x80 || s[2] > 0xbf)) {
+		return false;
 	}
 
-	if (byte >= 0xe0 && byte <= 0xef) {
-		ws->io.utf8_need = 2;
-		if (byte == 0xe0) {
-			ws->io.utf8_next_min = 0xa0;
-			ws->io.utf8_next_max = 0xbf;
-		} else if (byte == 0xed) {
-			ws->io.utf8_next_min = 0x80;
-			ws->io.utf8_next_max = 0x9f;
-		} else {
-			ws->io.utf8_next_min = 0x80;
-			ws->io.utf8_next_max = 0xbf;
+	return true;
+}
+
+static void lews_bqws_unmask_range(
+	bqws_msg_buffer *buf,
+	char *data,
+	size_t offset,
+	size_t size)
+{
+	if (!buf->masked || size == 0) return;
+
+	uint8_t mask_bytes[4];
+	memcpy(mask_bytes, &buf->mask_key, sizeof(mask_bytes));
+
+	while (size > 0 && (offset & 3) != 0) {
+		data[offset] ^= (char)mask_bytes[offset & 3];
+		offset++;
+		size--;
+	}
+
+	if (size > 0) {
+		mask_apply(data + offset, size, buf->mask_key);
+	}
+}
+
+static bool lews_bqws_utf8_validate_unmasked_range(
+	bqws_socket *ws,
+	const uint8_t *data,
+	size_t size)
+{
+	const U32 flags = UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE;
+
+	if (ws->io.utf8_tail_len != 0) {
+		size_t total = lews_bqws_utf8_expected_len(ws->io.utf8_tail[0]);
+		bqws_assert(total >= 2 && total <= 4);
+		bqws_assert(ws->io.utf8_tail_len < total);
+
+		size_t need = total - ws->io.utf8_tail_len;
+		size_t take = size < need ? size : need;
+
+		memcpy(
+			ws->io.utf8_tail + ws->io.utf8_tail_len,
+			data,
+			take
+		);
+		ws->io.utf8_tail_len += (uint8_t)take;
+		data += take;
+		size -= take;
+
+		if (ws->io.utf8_tail_len < total) {
+			return lews_bqws_utf8_valid_incomplete_prefix(
+				ws->io.utf8_tail,
+				ws->io.utf8_tail_len
+			);
 		}
-		return true;
-	}
 
-	if (byte >= 0xf0 && byte <= 0xf4) {
-		ws->io.utf8_need = 3;
-		if (byte == 0xf0) {
-			ws->io.utf8_next_min = 0x90;
-			ws->io.utf8_next_max = 0xbf;
-		} else if (byte == 0xf4) {
-			ws->io.utf8_next_min = 0x80;
-			ws->io.utf8_next_max = 0x8f;
-		} else {
-			ws->io.utf8_next_min = 0x80;
-			ws->io.utf8_next_max = 0xbf;
+		if (!is_utf8_string_flags(
+				(const U8 *)ws->io.utf8_tail,
+				(STRLEN)total,
+				flags)) {
+			return false;
 		}
+		ws->io.utf8_tail_len = 0;
+	}
+
+	if (size == 0) return true;
+
+	const U8 *first_variant = NULL;
+	if (is_utf8_invariant_string_loc(
+			(const U8 *)data,
+			(STRLEN)size,
+			&first_variant)) {
 		return true;
 	}
 
-	return false;
+	ws->io.utf8_non_ascii = true;
+
+	const U8 *failure = NULL;
+	if (is_utf8_string_loclen_flags(
+			(const U8 *)data,
+			(STRLEN)size,
+			&failure,
+			NULL,
+			flags)) {
+		return true;
+	}
+
+	const U8 *end = (const U8 *)data + size;
+	size_t tail_len = (size_t)(end - failure);
+	if (tail_len == 0 || tail_len > sizeof(ws->io.utf8_tail)
+		|| !lews_bqws_utf8_valid_incomplete_prefix(
+			(const uint8_t *)failure,
+			tail_len)) {
+		return false;
+	}
+
+	memcpy(ws->io.utf8_tail, failure, tail_len);
+	ws->io.utf8_tail_len = (uint8_t)tail_len;
+	return true;
 }
 
 static bool lews_bqws_utf8_consume_range(
 	bqws_socket *ws,
-	const bqws_msg_buffer *buf,
-	const char *data,
+	bqws_msg_buffer *buf,
+	char *data,
 	size_t offset,
 	size_t size)
 {
-	const uint8_t *mask = (const uint8_t *)&buf->mask_key;
+	if (size == 0) return true;
 
-	for (size_t i = 0; i < size; i++) {
-		size_t pos = offset + i;
-		uint8_t byte = (uint8_t)data[pos];
-		if (buf->masked) {
-			byte ^= mask[pos & 3];
-		}
-		if (!lews_bqws_utf8_consume_byte(ws, byte)) {
-			return false;
-		}
-	}
+	lews_bqws_unmask_range(buf, data, offset, size);
 
-	return true;
+	return lews_bqws_utf8_validate_unmasked_range(
+		ws,
+		(const uint8_t *)data + offset,
+		size
+	);
 }
 
 static bool lews_bqws_is_text_type(bqws_msg_type type)
@@ -2226,7 +2297,7 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 		if (num_read < to_read) return false;
 	}
 
-	if (buf->masked) {
+	if (buf->masked && !lews_bqws_is_text_type(msg->msg.type)) {
 		mask_apply(msg->msg.data, msg->msg.size, buf->mask_key);
 	}
 
@@ -2245,7 +2316,7 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 		bool logical_final =
 			(type & BQWS_MSG_PARTIAL_BIT) == 0
 			|| (type & BQWS_MSG_FINAL_BIT) != 0;
-		if (logical_final && ws->io.utf8_need != 0) {
+		if (logical_final && ws->io.utf8_tail_len != 0) {
 			ws_fail(ws, BQWS_ERR_BAD_UTF8);
 			return false;
 		}
