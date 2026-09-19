@@ -222,54 +222,52 @@ PPCODE:
     data = SvPVbyte(bytes, len);
     used = 0;
     while (used < (size_t)len) {
-        size_t n = bqws_read_from_one_message(
+        size_t n = bqws_read_from(
             state->ws,
             data + used,
             (size_t)len - used
         );
-
-        if (n > 0) {
-            used += n;
-        }
-
-        while ((msg = bqws_recv(state->ws)) != NULL) {
-            callback_error = NULL;
-
-            switch (msg->type) {
-            case BQWS_MSG_TEXT:
-                callback_error = lews_bq_call_event(
-                    callback_target, connection, 1, msg->data, msg->size
-                );
-                break;
-            case BQWS_MSG_BINARY:
-                callback_error = lews_bq_call_event(
-                    callback_target, connection, 2, msg->data, msg->size
-                );
-                break;
-            case BQWS_MSG_CONTROL_CLOSE:
-                callback_error = lews_bq_call_event(
-                    callback_target, connection, 8, msg->data, msg->size
-                );
-                break;
-            case BQWS_MSG_CONTROL_PING:
-            case BQWS_MSG_CONTROL_PONG:
-                break;
-            default:
-                bqws_free_msg(msg);
-                croak("unexpected bq_websocket message type %d", (int)msg->type);
-            }
-
-            bqws_free_msg(msg);
-
-            if (callback_error != NULL) {
-                croak_sv(callback_error);
-            }
-        }
-
-        if (bqws_get_error(state->ws) != BQWS_OK
-            || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING
-            || n == 0) {
+        if (n == 0) {
             break;
+        }
+        used += n;
+        if (bqws_get_error(state->ws) != BQWS_OK
+            || bqws_get_state(state->ws) >= BQWS_STATE_CLOSING) {
+            break;
+        }
+    }
+
+    while ((msg = bqws_recv_queued(state->ws)) != NULL) {
+        callback_error = NULL;
+
+        switch (msg->type) {
+        case BQWS_MSG_TEXT:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 1, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_BINARY:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 2, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_CLOSE:
+            callback_error = lews_bq_call_event(
+                callback_target, connection, 8, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_PING:
+        case BQWS_MSG_CONTROL_PONG:
+            break;
+        default:
+            bqws_free_msg(msg);
+            croak("unexpected bq_websocket message type %d", (int)msg->type);
+        }
+
+        bqws_free_msg(msg);
+
+        if (callback_error != NULL) {
+            croak_sv(callback_error);
         }
     }
 

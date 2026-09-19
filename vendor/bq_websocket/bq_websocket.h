@@ -469,6 +469,14 @@ const char *bqws_get_protocol(const bqws_socket *ws);
 
 // Receive a message, use `bqws_free_msg()` to free the returned pointer
 bqws_msg *bqws_recv(bqws_socket *ws);
+
+/*
+ * Linux::Event local extension: dequeue a message that was fully parsed before
+ * a later frame put the socket into an error state. This preserves wire-order
+ * delivery without changing parser read cadence.
+ */
+bqws_msg *bqws_recv_queued(bqws_socket *ws);
+
 void bqws_free_msg(bqws_msg *msg);
 
 // Single message
@@ -508,15 +516,6 @@ void bqws_update_io_write(bqws_socket *ws);
 
 // Non-callback IO: Read data to send to the peer or write data received from the peer.
 size_t bqws_read_from(bqws_socket *ws, const void *data, size_t size);
-
-/*
- * Linux::Event local extension: consume input only until a complete message
- * becomes available to bqws_recv(), or until parsing cannot make progress.
- * This lets the adapter deliver earlier valid messages before parsing a later
- * malformed frame coalesced in the same transport read.
- */
-size_t bqws_read_from_one_message(bqws_socket *ws, const void *data, size_t size);
-
 size_t bqws_write_to(bqws_socket *ws, void *data, size_t size);
 
 // Direct control

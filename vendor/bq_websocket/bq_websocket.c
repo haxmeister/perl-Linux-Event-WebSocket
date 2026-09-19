@@ -656,22 +656,6 @@ static size_t mem_stream_recv(void *user, bqws_socket *ws, void *data, size_t ma
 	return to_copy;
 }
 
-static size_t mem_stream_recv_min(void *user, bqws_socket *ws, void *data, size_t max_size, size_t min_size)
-{
-	/*
-	 * Linux::Event strict-order reader: do not prefetch bytes belonging to a
-	 * later frame. Copy only the parser's current minimum requirement.
-	 */
-	bqws_mem_stream *s = (bqws_mem_stream*)user;
-	size_t left = s->end - s->ptr;
-	size_t to_copy = min_size;
-	if (to_copy > max_size) to_copy = max_size;
-	if (to_copy > left) to_copy = left;
-	memcpy(data, s->ptr, to_copy);
-	s->ptr += to_copy;
-	return to_copy;
-}
-
 // -- Allocation
 
 // Direct allocator functions. Prefer using `ws_alloc()` if there is an `bqws_socket`
@@ -3011,6 +2995,23 @@ bqws_msg *bqws_recv(bqws_socket *ws)
 	return &imp->msg;
 }
 
+bqws_msg *bqws_recv_queued(bqws_socket *ws)
+{
+	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
+
+	/*
+	 * A later malformed frame may set ws->err after an earlier complete
+	 * message has already been queued. Linux::Event still delivers that
+	 * earlier message before reporting the later protocol error.
+	 */
+	bqws_msg_imp *imp = msg_dequeue(&ws->recv_queue);
+	if (!imp) return NULL;
+	bqws_assert(imp->magic == BQWS_MSG_MAGIC);
+
+	msg_release_ownership(ws, imp);
+	return &imp->msg;
+}
+
 void bqws_free_msg(bqws_msg *msg)
 {
 	if (!msg) return;
@@ -3380,28 +3381,6 @@ size_t bqws_read_from(bqws_socket *ws, const void *data, size_t size)
 
 	while (ws_read_data(ws, &mem_stream_recv, &s)) {
 		// Keep reading as long as there is space
-	}
-
-	bqws_mutex_unlock(&ws->io.mutex);
-
-	return s.ptr - (char*)data;
-}
-
-size_t bqws_read_from_one_message(bqws_socket *ws, const void *data, size_t size)
-{
-	bqws_assert(ws && ws->magic == BQWS_SOCKET_MAGIC);
-	bqws_assert(!ws->user_io.recv_fn);
-
-	bqws_mutex_lock(&ws->io.mutex);
-
-	bqws_mem_stream s;
-	s.ptr = (char*)data;
-	s.end = s.ptr + size;
-
-	size_t queued_before = ws->recv_queue.num_messages;
-	while (ws->recv_queue.num_messages == queued_before
-		&& ws_read_data(ws, &mem_stream_recv_min, &s)) {
-		// Stop as soon as one complete message/control frame is queued.
 	}
 
 	bqws_mutex_unlock(&ws->io.mutex);
