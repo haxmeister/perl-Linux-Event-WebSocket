@@ -47,6 +47,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <time.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <errno.h>
+#include <sys/random.h>
 
 // -- Config
 
@@ -969,14 +971,20 @@ static void msg_queue_get_stats(bqws_msg_queue *mq, bqws_io_stats *stats)
 
 static uint32_t mask_make_key(bqws_socket *ws)
 {
+	uint32_t key;
+	ssize_t n;
+
 	bqws_assert_locked(&ws->io.mutex);
-	// PCG Random step
-	const uint64_t c = UINT64_C(6364136223846793005);
-	uint64_t s = ws->io.mask_random_state * c + ws->io.mask_random_stream;
-	uint32_t xs = (uint32_t)(((s >> 18u) ^ s) >> 27u), r = s >> 59u;
-	ws->io.mask_random_state = s;
-	uint32_t rng = (xs >> r) | (xs << (((uint32_t)-(int32_t)r) & 31));
-	return rng ^ (uint32_t)bqws_get_timestamp();
+	do {
+		n = getrandom(&key, sizeof(key), 0);
+	} while (n < 0 && errno == EINTR);
+
+	if (n != (ssize_t)sizeof(key)) {
+		ws_fail(ws, BQWS_ERR_IO_WRITE);
+		return 0;
+	}
+
+	return key;
 }
 
 static void mask_apply(void *data, size_t size, uint32_t mask)
