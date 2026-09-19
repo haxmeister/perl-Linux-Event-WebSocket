@@ -108,6 +108,15 @@ sub output_close_code ($wire) {
 
 {
     my ($engine, $connection) = server_engine();
+    $engine->feed(client_frame('binary', ''));
+    is_deeply($connection->{messages}, [ [ binary => '' ] ],
+        'engine delivers an empty binary message as an empty scalar');
+    is_deeply($connection->{errors}, [],
+        'empty binary message reports no error');
+}
+
+{
+    my ($engine, $connection) = server_engine();
     my $wire = client_frame('text', 'hel', fin => 0)
         . client_frame('ping', 'p')
         . client_frame('continuation', 'lo');
@@ -144,7 +153,7 @@ sub output_close_code ($wire) {
 {
     my ($engine, $connection) = server_engine();
     $engine->feed(client_frame('continuation', 'orphan'));
-    like($connection->{errors}[0], qr/continuation/i,
+    like($connection->{errors}[0], qr/protocol error/i,
         'orphan continuation reports a protocol error');
     is(output_close_code($connection->{output}[0]), 1002,
         'fragmentation protocol failure sends close 1002');
@@ -157,7 +166,7 @@ sub output_close_code ($wire) {
         client_frame('text', 'unfinished', fin => 0)
         . client_frame('binary', 'new message')
     );
-    like($connection->{errors}[0], qr/fragmented message is unfinished/,
+    like($connection->{errors}[0], qr/protocol error/i,
         'new data frame during fragmentation reports a protocol error');
     is(output_close_code($connection->{output}[0]), 1002,
         'overlapping fragmented message sends close 1002');
@@ -200,7 +209,7 @@ sub output_close_code ($wire) {
 {
     my ($engine, $connection) = server_engine();
     $engine->feed(client_frame('close', "\x03"));
-    like($connection->{errors}[0], qr/one-byte payload/,
+    like($connection->{errors}[0], qr/protocol error/i,
         'invalid close payload reports a protocol error');
     is(output_close_code($connection->{output}[0]), 1002,
         'invalid close payload sends close 1002');
@@ -209,7 +218,7 @@ sub output_close_code ($wire) {
 {
     my ($engine, $connection) = server_engine();
     $engine->feed(client_frame('close', pack('n', 1000) . "\xff"));
-    like($connection->{errors}[0], qr/UTF-8 reason/,
+    like($connection->{errors}[0], qr/UTF-8/i,
         'invalid close reason reports a payload error');
     is(output_close_code($connection->{output}[0]), 1007,
         'invalid close reason sends close 1007');

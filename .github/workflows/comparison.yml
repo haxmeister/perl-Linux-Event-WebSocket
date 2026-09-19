@@ -2,6 +2,12 @@ name: WebSocket implementation comparison
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'lib/Linux/Event/WebSocket/_Wslay.pm'
+      - 'lib/Linux/Event/WebSocket/_Engine.pm'
+      - '.github/workflows/comparison.yml'
   push:
     branches: [ main ]
     paths:
@@ -39,7 +45,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev
+          sudo apt-get install -y build-essential libssl-dev libwslay-dev
 
       - name: Install Linux::Event dependencies
         run: |
@@ -66,6 +72,9 @@ jobs:
         run: |
           perl Makefile.PL
           make
+
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
 
       - name: Record environment
         run: |
