@@ -1,0 +1,132 @@
+name: strictness performance A/B
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/strictness-performance.yml'
+
+concurrency:
+  group: strictness-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout strict branch
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build strict branch
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build merge-ready baseline
+        run: |
+          git clone --depth 1 --branch feature/bq-native-engine             https://github.com/haxmeister/perl-Linux-Event-WebSocket.git             /tmp/websocket-baseline
+          (
+            cd /tmp/websocket-baseline
+            perl Makefile.PL
+            make
+          )
+
+      - name: Add Unicode one-way benchmark
+        run: |
+          git show origin/experiment/bq-realistic-unicode:bench/unicode-one-way.pl             > /tmp/unicode-one-way.pl
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            echo "baseline=$(git -C /tmp/websocket-baseline rev-parse HEAD)"
+            echo "strict=$(git rev-parse HEAD)"
+          } | tee strictness-performance-environment.txt
+
+      - name: Run same-run A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > strictness-performance.txt
+
+          baseline="/tmp/websocket-baseline/blib/lib:/tmp/websocket-baseline/blib/arch"
+          strict="$PWD/blib/lib:$PWD/blib/arch"
+
+          run_echo() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-9s ' "$label" | tee -a strictness-performance.txt
+            PERL5LIB="$lib:${PERL5LIB:-}"               perl bench/evaluate-engine.pl "$@"               | tee -a strictness-performance.txt
+          }
+
+          run_unicode() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-9s ' "$label" | tee -a strictness-performance.txt
+            PERL5LIB="$lib:${PERL5LIB:-}"               perl /tmp/unicode-one-way.pl "$@"               | tee -a strictness-performance.txt
+          }
+
+          case_no=0
+          for round in 1 2; do
+            echo "round=$round" | tee -a strictness-performance.txt
+
+            for type in binary text; do
+              for bytes in 64 1024 16384; do
+                args=(--type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                if (( (case_no + round) % 2 )); then
+                  run_echo baseline "$baseline" "${args[@]}"
+                  run_echo strict "$strict" "${args[@]}"
+                else
+                  run_echo strict "$strict" "${args[@]}"
+                  run_echo baseline "$baseline" "${args[@]}"
+                fi
+                case_no=$((case_no + 1))
+              done
+            done
+
+            for profile in json-mixed cjk emoji; do
+              for bytes in 256 1024 16384; do
+                args=(--direction c2s --profile "$profile" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                if (( (case_no + round) % 2 )); then
+                  run_unicode baseline "$baseline" "${args[@]}"
+                  run_unicode strict "$strict" "${args[@]}"
+                else
+                  run_unicode strict "$strict" "${args[@]}"
+                  run_unicode baseline "$baseline" "${args[@]}"
+                fi
+                case_no=$((case_no + 1))
+              done
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: strictness-performance
+          path: |
+            strictness-performance-environment.txt
+            strictness-performance.txt
