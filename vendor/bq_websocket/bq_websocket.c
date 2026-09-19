@@ -656,6 +656,22 @@ static size_t mem_stream_recv(void *user, bqws_socket *ws, void *data, size_t ma
 	return to_copy;
 }
 
+static size_t mem_stream_recv_min(void *user, bqws_socket *ws, void *data, size_t max_size, size_t min_size)
+{
+	/*
+	 * Linux::Event strict-order reader: do not prefetch bytes belonging to a
+	 * later frame. Copy only the parser's current minimum requirement.
+	 */
+	bqws_mem_stream *s = (bqws_mem_stream*)user;
+	size_t left = s->end - s->ptr;
+	size_t to_copy = min_size;
+	if (to_copy > max_size) to_copy = max_size;
+	if (to_copy > left) to_copy = left;
+	memcpy(data, s->ptr, to_copy);
+	s->ptr += to_copy;
+	return to_copy;
+}
+
 // -- Allocation
 
 // Direct allocator functions. Prefer using `ws_alloc()` if there is an `bqws_socket`
@@ -3384,7 +3400,7 @@ size_t bqws_read_from_one_message(bqws_socket *ws, const void *data, size_t size
 
 	size_t queued_before = ws->recv_queue.num_messages;
 	while (ws->recv_queue.num_messages == queued_before
-		&& ws_read_data(ws, &mem_stream_recv, &s)) {
+		&& ws_read_data(ws, &mem_stream_recv_min, &s)) {
 		// Stop as soon as one complete message/control frame is queued.
 	}
 
