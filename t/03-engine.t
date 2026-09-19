@@ -232,6 +232,28 @@ sub output_close_code ($wire) {
 }
 
 
+
+{
+    my ($engine, $connection) = server_engine();
+    my $valid = encode('UTF-8', "valid-\x{03ba}");
+    my $wire = client_frame(
+        'text',
+        $valid . pack('H*', 'f4908080') . 'rest',
+    );
+
+    my $header_size = 6;
+    my $first_end = $header_size + length($valid);
+    $engine->feed(substr($wire, 0, $first_end));
+    is_deeply($connection->{errors}, [],
+        'valid first TCP chop of one text frame is accepted');
+
+    $engine->feed(substr($wire, $first_end, 4));
+    like($connection->{errors}[0], qr/UTF-8/,
+        'invalid second TCP chop fails UTF-8 immediately');
+    is(output_close_code($connection->{output}[0]), 1007,
+        'chopped invalid text sends close 1007 before frame completion');
+}
+
 {
     my ($engine, $connection) = server_engine();
 
