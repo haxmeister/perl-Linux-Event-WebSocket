@@ -231,6 +231,25 @@ sub output_close_code ($wire) {
         'message-size failure sends close 1009');
 }
 
+
+{
+    my ($engine, $connection) = server_engine();
+
+    $engine->feed(
+        client_frame('text', encode('UTF-8', "valid-\x{03ba}"), fin => 0)
+    );
+    is_deeply($connection->{errors}, [],
+        'first valid text fragment is accepted before UTF-8 failure');
+
+    $engine->feed(
+        client_frame('continuation', pack('H*', 'f4908080'), fin => 0)
+    );
+    like($connection->{errors}[0], qr/UTF-8/,
+        'invalid continuation fragment fails UTF-8 immediately');
+    is(output_close_code($connection->{output}[0]), 1007,
+        'incremental invalid UTF-8 sends close 1007 before final fragment');
+}
+
 {
     my ($engine, $connection) = server_engine();
     $engine->feed(client_frame('text', "\xff"));
