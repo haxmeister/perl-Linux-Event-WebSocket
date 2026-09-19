@@ -135,10 +135,8 @@ lews_protocol_close(lews_wslay *state, uint16_t status_code)
     uint8_t frame[8];
     uint8_t mask[4];
     uint8_t payload[2];
-    uint16_t ncode;
-
-    ncode = htons(status_code);
-    memcpy(payload, &ncode, 2);
+    payload[0] = (uint8_t)(status_code >> 8);
+    payload[1] = (uint8_t)(status_code & 0xffu);
     frame[0] = 0x88u;
 
     if (!state->client) {
