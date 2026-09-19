@@ -187,6 +187,7 @@ lews_bq_drain_events(
     SV *connection
 )
 {
+    bqws_msg *msg;
 
     while ((msg = bqws_recv(state->ws)) != NULL) {
         SV *callback_error = NULL;
