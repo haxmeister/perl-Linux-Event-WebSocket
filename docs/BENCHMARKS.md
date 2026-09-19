@@ -3,6 +3,36 @@
 These measurements guide implementation decisions. They are not published as
 hardware-independent performance claims.
 
+## Current native-engine decision
+
+The production integration now uses the locally patched vendored bq core
+through XS. This decision followed same-run experiments against the previous
+Perl engine and a wslay prototype.
+
+Representative optimized-bq results included:
+
+| workload | previous main | wslay | optimized bq |
+| --- | ---: | ---: | ---: |
+| text 64 B, 1 client | ~28k/s | ~68k/s | ~95k/s |
+| text 1 KiB, 1 client | ~26k/s | ~44k/s | ~84k/s |
+| text 16 KiB, 1 client | ~9.9k/s | ~5.2k/s | ~25k/s |
+| text 64 B, 100 clients | ~22k/s | ~53k/s | ~69k/s |
+
+One-way realistic mixed JSON/emoji traffic also favored bq. A corrected
+client-to-server sample measured about 82.5k/s at 64 B, 60.1k/s at 1 KiB, and
+11.85k/s at 16 KiB, versus about 63.8k/18.0k/1.46k for wslay and
+34.7k/9.95k/0.81k for the previous main implementation.
+
+A pub/sub fan-out benchmark, where one producer message was broadcast and
+actually received by every subscriber before the next cycle, measured
+approximately 61.5k aggregate deliveries/s at 256 B / 100 subscribers,
+56.6k/s at 1 KiB / 100, and 20.6k/s at 16 KiB / 100. The same cases were about
+46.9k/27.0k/2.7k for wslay and 35.6k/16.9k/1.49k for previous main.
+
+These are development-runner measurements, not universal performance claims.
+Their role is architectural: the gains were large, repeated across realistic
+workloads, and survived the full correctness gates.
+
 ## Method
 
 Repository author benchmarks live under `bench/`.
@@ -83,13 +113,13 @@ GitHub-runner values should not be compared too literally across runs.
 
 ## Native-code conclusion
 
-The benchmark pass found real bottlenecks, but both had strong Perl-level
-solutions. Current evidence does **not** justify WebSocket-specific XS.
+The early pure-Perl optimizations were useful and remain documented below, but
+later end-to-end measurements changed the conclusion. The vendored bq engine
+with a thin XS adapter materially improves the real protocol path, especially
+for medium/large text, Unicode-heavy traffic, concurrency, and fan-out.
 
-Native code should be reconsidered only after a future stable benchmark shows a
-remaining protocol-layer bottleneck that is material in end-to-end workloads.
-Masking or parsing are plausible future candidates, but neither is currently a
-reason to add C/XS maintenance burden.
+The native code therefore belongs in Linux::Event::WebSocket. Linux::Event core
+remains unchanged because this optimization is protocol-specific.
 
 ## Cross-implementation comparison
 
@@ -134,21 +164,11 @@ The mirror client comparison on the same runner measured:
 | text 16 KiB, 1 conn | 12.7k | 19.8k | 33.4k | 21.9k |
 | text 64 B, 100 conn | 26.6k | 36.0k | 127.9k | 140.8k |
 
-The comparison shows that Linux::Event::WebSocket is close to Mojolicious for
-server-side concurrency and exceeds it for the representative 16 KiB binary
-server case, while Mojolicious retains a moderate advantage on most small and
-medium messages. The native-heavy Node and Go implementations remain several
-times faster on small-message workloads.
-
-The client comparison shows a larger Perl-to-Perl gap: Linux::Event is commonly
-about 64-91% of Mojolicious throughput depending on payload, with the closest
-result again on larger binary messages.
-
-These results do not point to masking or standalone parsing as the dominant
-remaining cost. The private parser/masking microbenchmarks are much faster than
-the public end-to-end rates. The next useful performance investigation is
-therefore profiling the complete parser -> engine -> connection -> callback
-dispatch path rather than adding WebSocket-specific XS speculatively.
+These tables record the pre-native baseline that motivated the later engine
+work. They are retained for history; they do not describe the current bq-backed
+production path. The integration branch reruns the same comparison before
+merge so the post-native numbers remain a same-run result rather than a
+cross-run inference.
 
 ## Timer-fairness observation
 
