@@ -75,23 +75,26 @@ sub utf8_bytes ($text) {
 }
 
 sub make_payload ($name, $target) {
-    my $piece = $unit{$name};
-    my $piece_bytes = utf8_bytes($piece);
-    die "empty profile unit\n" if !$piece_bytes;
+    my @character = split //, $unit{$name};
+    die "empty profile unit\n" if !@character;
 
-    my $repeat = int($target / $piece_bytes);
-    $repeat = 1 if $repeat < 1;
+    my @width = map { utf8_bytes($_) } @character;
+    my $payload = '';
+    my $used = 0;
+    my $index = 0;
 
-    my $payload = $piece x $repeat;
-
-    while (utf8_bytes($payload . $piece) <= $target) {
-        $payload .= $piece;
+    for (;;) {
+        my $slot = $index++ % @character;
+        my $width = $width[$slot];
+        last if $used + $width > $target;
+        $payload .= $character[$slot];
+        $used += $width;
     }
 
-    # Keep dense Unicode profiles dense. For ASCII and realistic mixed
-    # application text, fill the final few bytes with ordinary ASCII.
+    # These profiles naturally contain ASCII, so using ASCII for the last
+    # byte or two preserves their intended character mix while making the
+    # requested wire size exact. Dense CJK/emoji profiles remain dense.
     if ($name eq 'ascii' || $name eq 'json-mixed' || $name eq 'european') {
-        my $used = utf8_bytes($payload);
         $payload .= 'x' x ($target - $used) if $used < $target;
     }
 
