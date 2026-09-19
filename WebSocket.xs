@@ -18,6 +18,7 @@ typedef struct {
     SV *callback_error;
     int in_recv;
     int forced_failure_code;
+    int client;
 } lews_wslay;
 
 static lews_wslay *
@@ -110,6 +111,53 @@ lews_on_frame_recv_start_callback(
     }
 }
 
+static SV *
+lews_payload_sv(const uint8_t *data, size_t len, int text)
+{
+    SV *sv;
+    size_t i;
+
+    sv = newSVpvn(data == NULL ? "" : (const char *)data, len);
+    if (text) {
+        for (i = 0; i < len; ++i) {
+            if (data[i] & 0x80u) {
+                SvUTF8_on(sv);
+                break;
+            }
+        }
+    }
+    return sv;
+}
+
+static SV *
+lews_protocol_close(lews_wslay *state, uint16_t status_code)
+{
+    uint8_t frame[8];
+    uint8_t mask[4];
+    uint8_t payload[2];
+    uint16_t ncode;
+
+    ncode = htons(status_code);
+    memcpy(payload, &ncode, 2);
+    frame[0] = 0x88u;
+
+    if (!state->client) {
+        frame[1] = 2u;
+        memcpy(frame + 2, payload, 2);
+        return newSVpvn((const char *)frame, 4);
+    }
+
+    if (lews_genmask_callback(state->ctx, mask, sizeof(mask), state) != 0) {
+        croak("unable to generate WebSocket close mask");
+    }
+
+    frame[1] = 0x82u;
+    memcpy(frame + 2, mask, 4);
+    frame[6] = payload[0] ^ mask[0];
+    frame[7] = payload[1] ^ mask[1];
+    return newSVpvn((const char *)frame, 8);
+}
+
 static void
 lews_on_msg_recv_callback(wslay_event_context_ptr ctx,
                           const struct wslay_event_on_msg_recv_arg *arg,
@@ -140,7 +188,12 @@ lews_on_msg_recv_callback(wslay_event_context_ptr ctx,
     EXTEND(SP, 4);
     PUSHs(sv_2mortal(newSVsv(state->callback_target)));
     PUSHs(sv_2mortal(newSViv((IV)arg->opcode)));
-    PUSHs(sv_2mortal(newSVpvn((const char *)payload, payload_len)));
+    PUSHs(sv_2mortal(lews_payload_sv(
+        payload,
+        payload_len,
+        arg->opcode == WSLAY_TEXT_FRAME ||
+        arg->opcode == WSLAY_CONNECTION_CLOSE
+    )));
     PUSHs(sv_2mortal(newSViv((IV)arg->status_code)));
     PUTBACK;
 
@@ -206,6 +259,7 @@ CODE:
     callbacks.on_msg_recv_callback = lews_on_msg_recv_callback;
 
     if (strEQ(endpoint_type, "client")) {
+        state->client = 1;
         callbacks.genmask_callback = lews_genmask_callback;
         rc = wslay_event_context_client_init(&state->ctx, &callbacks, state);
     } else if (strEQ(endpoint_type, "server")) {
@@ -263,13 +317,27 @@ PPCODE:
         state->callback_error = NULL;
         croak_sv(callback_error);
     }
-    if (rc < 0) {
-        croak("wslay_event_recv failed with code %d", rc);
+
+    /*
+     * wslay_event_recv() maps frame-parser structural failures to
+     * WSLAY_ERR_CALLBACK_FAILURE after queueing an empty Close frame.
+     * RFC 6455 requires those failures to use 1002.  Replace that
+     * library-generated empty Close at the adapter boundary.
+     */
+    if (rc == WSLAY_ERR_CALLBACK_FAILURE) {
+        wslay_event_shutdown_write(state->ctx);
+        output = lews_protocol_close(state, WSLAY_CODE_PROTOCOL_ERROR);
+        failure_code = WSLAY_CODE_PROTOCOL_ERROR;
+    } else {
+        if (rc < 0) {
+            croak("wslay_event_recv failed with code %d", rc);
+        }
+        output = lews_flush(state);
     }
 
-    output = lews_flush(state);
-
-    if (state->forced_failure_code) {
+    if (failure_code) {
+        /* already classified above */
+    } else if (state->forced_failure_code) {
         failure_code = state->forced_failure_code;
     } else if (!wslay_event_get_read_enabled(state->ctx) &&
                !wslay_event_get_close_received(state->ctx)) {

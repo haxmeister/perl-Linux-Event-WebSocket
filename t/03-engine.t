@@ -108,6 +108,15 @@ sub output_close_code ($wire) {
 
 {
     my ($engine, $connection) = server_engine();
+    $engine->feed(client_frame('binary', ''));
+    is_deeply($connection->{messages}, [ [ binary => '' ] ],
+        'engine delivers an empty binary message as an empty scalar');
+    is_deeply($connection->{errors}, [],
+        'empty binary message reports no error');
+}
+
+{
+    my ($engine, $connection) = server_engine();
     my $wire = client_frame('text', 'hel', fin => 0)
         . client_frame('ping', 'p')
         . client_frame('continuation', 'lo');

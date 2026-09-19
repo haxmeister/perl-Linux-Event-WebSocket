@@ -5,8 +5,6 @@ use warnings;
 
 use Carp qw(croak);
 use Scalar::Util qw(blessed weaken);
-use utf8 ();
-
 use Linux::Event::WebSocket::_Frame;
 use Linux::Event::WebSocket::_Wslay;
 
@@ -129,15 +127,7 @@ sub _deliver ($self, $opcode, $payload, $connection) {
         return;
     }
 
-    my $type;
-    if ($opcode == 1) {
-        $type = 'text';
-        my $decoded = $payload;
-        die "wslay delivered invalid UTF-8 text\n" if !utf8::decode($decoded);
-        $payload = $decoded;
-    } else {
-        $type = 'binary';
-    }
+    my $type = $opcode == 1 ? 'text' : 'binary';
 
     if ($self->{message_handler_supplied}) {
         if (my $handler = $self->{message_handler}) {
@@ -167,10 +157,6 @@ sub _wslay_event ($self, $opcode, $payload, $status_code) {
     $connection->_websocket_engine_closing;
 
     my $reason = $payload;
-    if (length $reason) {
-        die "wslay delivered invalid UTF-8 close reason\n"
-            if !utf8::decode($reason);
-    }
     my $code = $status_code ? 0 + $status_code : undef;
     $connection->_websocket_engine_close($code, $reason);
     $self->{pending_end} = 1;
