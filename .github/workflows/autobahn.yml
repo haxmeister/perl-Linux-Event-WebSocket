@@ -53,6 +53,9 @@ jobs:
           perl Makefile.PL
           make
 
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
+
       - name: Start Perl Autobahn testee
         run: |
           perl -Iblib/lib xt/autobahn/echo-server.pl > /tmp/autobahn-testee.log 2>&1 &
@@ -148,6 +151,9 @@ jobs:
         run: |
           perl Makefile.PL
           make
+
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
 
       - name: Start Autobahn fuzzing server
         run: |

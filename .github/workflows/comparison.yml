@@ -73,6 +73,9 @@ jobs:
           perl Makefile.PL
           make
 
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
+
       - name: Record environment
         run: |
           {
