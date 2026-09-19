@@ -1,0 +1,123 @@
+name: wslay paired evaluation
+
+on:
+  pull_request:
+    paths:
+      - 'WebSocket.xs'
+      - 'Makefile.PL'
+      - 'lib/Linux/Event/WebSocket/**'
+      - 'bench/evaluate-wslay.pl'
+      - '.github/workflows/wslay-evaluation.yml'
+
+concurrency:
+  group: wslay-evaluation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  paired-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout wslay experiment
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libwslay-dev
+
+      - name: Install Linux::Event dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+
+      - name: Build experiment
+        run: |
+          perl Makefile.PL
+          make
+
+      - name: Build current main baseline
+        run: |
+          git clone --depth 1 --branch main             https://github.com/haxmeister/perl-Linux-Event-WebSocket.git             /tmp/websocket-main
+          (
+            cd /tmp/websocket-main
+            perl Makefile.PL
+            make
+          )
+
+      - name: Record environment
+        run: |
+          {
+            uname -a
+            lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
+            echo "perl=$(perl -e 'print $^V')"
+            dpkg-query -W -f='wslay=${Version}\n' libwslay1
+            echo "baseline_commit=$(git -C /tmp/websocket-main rev-parse HEAD)"
+            echo "experiment_commit=$(git rev-parse HEAD)"
+          } | tee wslay-environment.txt
+
+      - name: Run paired benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > wslay-evaluation.txt
+
+          run_one() {
+            local label="$1"
+            local lib="$2"
+            shift 2
+            printf '%-8s ' "$label" | tee -a wslay-evaluation.txt
+            PERL5LIB="$lib:${PERL5LIB:-}"               perl bench/evaluate-wslay.pl "$@"               | tee -a wslay-evaluation.txt
+          }
+
+          current="$PWD/blib/lib:$PWD/blib/arch"
+          baseline="/tmp/websocket-main/blib/lib:/tmp/websocket-main/blib/arch"
+
+          for round in 1 2; do
+            echo "round=$round" | tee -a wslay-evaluation.txt
+            case_no=0
+
+            for type in binary text; do
+              for bytes in 64 1024 16384; do
+                case_no=$((case_no + 1))
+                args=(--type "$type" --bytes "$bytes" --clients 1 --window 32 --seconds 2 --warmup 0.5)
+                if (( (case_no + round) % 2 )); then
+                  run_one main "$baseline" "${args[@]}"
+                  run_one wslay "$current" "${args[@]}"
+                else
+                  run_one wslay "$current" "${args[@]}"
+                  run_one main "$baseline" "${args[@]}"
+                fi
+              done
+            done
+
+            for type in binary text; do
+              case_no=$((case_no + 1))
+              args=(--type "$type" --bytes 64 --clients 100 --window 8 --seconds 2 --warmup 0.5)
+              if (( (case_no + round) % 2 )); then
+                run_one main "$baseline" "${args[@]}"
+                run_one wslay "$current" "${args[@]}"
+              else
+                run_one wslay "$current" "${args[@]}"
+                run_one main "$baseline" "${args[@]}"
+              fi
+            done
+          done
+
+      - name: Upload paired results
+        uses: actions/upload-artifact@v4
+        with:
+          name: wslay-paired-evaluation
+          path: |
+            wslay-environment.txt
+            wslay-evaluation.txt
