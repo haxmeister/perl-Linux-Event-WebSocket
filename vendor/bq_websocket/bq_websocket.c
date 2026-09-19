@@ -455,6 +455,11 @@ struct bqws_socket {
 		bqws_timestamp last_ping_ts;
 		size_t recv_partial_size;
 
+		// Linux::Event incremental RFC 3629 receive validation state.
+		uint8_t utf8_need;
+		uint8_t utf8_next_min;
+		uint8_t utf8_next_max;
+
 		// Handshake
 		bqws_handshake_buffer handshake;
 		bqws_handshake_buffer handshake_overflow;
@@ -1586,6 +1591,96 @@ static bool lews_bqws_valid_utf8(const uint8_t *s, size_t n)
 	return true;
 }
 
+
+static void lews_bqws_utf8_reset(bqws_socket *ws)
+{
+	ws->io.utf8_need = 0;
+	ws->io.utf8_next_min = 0x80;
+	ws->io.utf8_next_max = 0xbf;
+}
+
+static bool lews_bqws_utf8_consume_byte(bqws_socket *ws, uint8_t byte)
+{
+	if (ws->io.utf8_need != 0) {
+		if (byte < ws->io.utf8_next_min || byte > ws->io.utf8_next_max) {
+			return false;
+		}
+		ws->io.utf8_need--;
+		ws->io.utf8_next_min = 0x80;
+		ws->io.utf8_next_max = 0xbf;
+		return true;
+	}
+
+	if (byte <= 0x7f) return true;
+
+	if (byte >= 0xc2 && byte <= 0xdf) {
+		ws->io.utf8_need = 1;
+		ws->io.utf8_next_min = 0x80;
+		ws->io.utf8_next_max = 0xbf;
+		return true;
+	}
+
+	if (byte >= 0xe0 && byte <= 0xef) {
+		ws->io.utf8_need = 2;
+		if (byte == 0xe0) {
+			ws->io.utf8_next_min = 0xa0;
+			ws->io.utf8_next_max = 0xbf;
+		} else if (byte == 0xed) {
+			ws->io.utf8_next_min = 0x80;
+			ws->io.utf8_next_max = 0x9f;
+		} else {
+			ws->io.utf8_next_min = 0x80;
+			ws->io.utf8_next_max = 0xbf;
+		}
+		return true;
+	}
+
+	if (byte >= 0xf0 && byte <= 0xf4) {
+		ws->io.utf8_need = 3;
+		if (byte == 0xf0) {
+			ws->io.utf8_next_min = 0x90;
+			ws->io.utf8_next_max = 0xbf;
+		} else if (byte == 0xf4) {
+			ws->io.utf8_next_min = 0x80;
+			ws->io.utf8_next_max = 0x8f;
+		} else {
+			ws->io.utf8_next_min = 0x80;
+			ws->io.utf8_next_max = 0xbf;
+		}
+		return true;
+	}
+
+	return false;
+}
+
+static bool lews_bqws_utf8_consume_range(
+	bqws_socket *ws,
+	const bqws_msg_buffer *buf,
+	const char *data,
+	size_t offset,
+	size_t size)
+{
+	const uint8_t *mask = (const uint8_t *)&buf->mask_key;
+
+	for (size_t i = 0; i < size; i++) {
+		size_t pos = offset + i;
+		uint8_t byte = (uint8_t)data[pos];
+		if (buf->masked) {
+			byte ^= mask[pos & 3];
+		}
+		if (!lews_bqws_utf8_consume_byte(ws, byte)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool lews_bqws_is_text_type(bqws_msg_type type)
+{
+	return (type & BQWS_MSG_TYPE_MASK) == BQWS_MSG_TEXT;
+}
+
 static void ws_handle_control(bqws_socket *ws, bqws_msg_imp *msg)
 {
 	bqws_msg_type type = msg->msg.type;
@@ -2019,6 +2114,10 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			// Text or Binary
 			type = opcode == 0x1 ? BQWS_MSG_TEXT : BQWS_MSG_BINARY;
 
+			if (opcode == 0x1) {
+				lews_bqws_utf8_reset(ws);
+			}
+
 			// A new data message cannot begin until the current fragmented
 			// message has received its final continuation frame.
 			if (buf->partial_type != BQWS_MSG_INVALID) {
@@ -2062,6 +2161,12 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 			size_t to_copy = left;
 			if (to_copy > imp->msg.size) to_copy = imp->msg.size;
 			memcpy(imp->msg.data, ws->io.recv_header + offset, to_copy);
+			if (lews_bqws_is_text_type(imp->msg.type)
+				&& !lews_bqws_utf8_consume_range(
+					ws, buf, imp->msg.data, 0, to_copy)) {
+				ws_fail(ws, BQWS_ERR_BAD_UTF8);
+				return false;
+			}
 			buf->offset += to_copy;
 			offset += to_copy;
 			left -= to_copy;
@@ -2081,6 +2186,7 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 	if (msg->msg.size > 0 && buf->offset < msg->msg.size) {
 
 		size_t to_read = msg->msg.size - buf->offset;
+		size_t old_offset = buf->offset;
 		size_t num_read = recv_fn(user, ws, msg->msg.data + buf->offset, to_read, to_read);
 		if (num_read == 0) return false;
 		if (num_read == SIZE_MAX) {
@@ -2091,6 +2197,13 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 
 		if (ws->ping_interval != SIZE_MAX) {
 			ws->io.last_read_ts = bqws_get_timestamp();
+		}
+
+		if (lews_bqws_is_text_type(msg->msg.type)
+			&& !lews_bqws_utf8_consume_range(
+				ws, buf, msg->msg.data, old_offset, num_read)) {
+			ws_fail(ws, BQWS_ERR_BAD_UTF8);
+			return false;
 		}
 
 		buf->offset += num_read;
@@ -2111,6 +2224,16 @@ static bool ws_read_data(bqws_socket *ws, bqws_io_recv_fn recv_fn, void *user)
 	// If we copied the last bytes of the message we can push it
 	// to the queue and clear the buffer.
 	bqws_msg_type type = msg->msg.type;
+
+	if (lews_bqws_is_text_type(type)) {
+		bool logical_final =
+			(type & BQWS_MSG_PARTIAL_BIT) == 0
+			|| (type & BQWS_MSG_FINAL_BIT) != 0;
+		if (logical_final && ws->io.utf8_need != 0) {
+			ws_fail(ws, BQWS_ERR_BAD_UTF8);
+			return false;
+		}
+	}
 
 	if (ws->log_recv) {
 		ws_log2(ws, "Received: ", bqws_msg_type_str(buf->msg->msg.type));
