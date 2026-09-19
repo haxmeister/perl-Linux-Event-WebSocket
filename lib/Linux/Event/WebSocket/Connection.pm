@@ -105,11 +105,7 @@ sub send_text ($self, $payload) {
     croak 'send_text(): WebSocket connection is closing'
         if $state->{closing};
 
-    my $bytes = eval {
-        Linux::Event::WebSocket::_UTF8->encode($payload);
-    };
-    croak 'send_text(): payload contains invalid UTF-8' if $@;
-    return $state->{engine}->send_text($bytes);
+    return $state->{engine}->send_text($payload);
 }
 
 sub send_binary ($self, $payload) {
