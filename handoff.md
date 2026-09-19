@@ -7,6 +7,58 @@
 Development version: `0.001_001`. No CPAN release has been made.
 
 
+### bq native send_text measurement
+
+Branch: `experiment/bq-native-send-text`. Draft PR: #6.
+
+This branch layers the winning inbound Perl-C-API validator on top of the
+direct-delivery bq path and moves outbound `send_text` validation/encoding
+into XS. The public API is unchanged and there is no echo-specific shortcut.
+
+For byte scalars, XS uses the bytes directly and validates them with
+`is_utf8_string_flags(..., UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE)`. For
+Perl UTF-8 scalars, XS uses the scalar's existing UTF-8 representation,
+validates the same RFC 3629 boundary, and passes those bytes to bq. Surrogates,
+Perl-extended UTF-8, malformed sequences, and values above U+10FFFF remain
+rejected; Unicode noncharacters remain allowed.
+
+Normal tests are green on Perl 5.36 and 5.44 and both Autobahn directions are
+green.
+
+The one-way benchmark isolates the send-side change because both variants use
+the same native receive validator. Two-round averages:
+
+- client -> server text 64 B: Perl send 152.7k/s, native send 171.5k/s (+12.3%);
+- client -> server text 1 KiB: 140.4k/s -> 154.5k/s (+10.1%);
+- client -> server text 16 KiB: 53.6k/s -> 59.1k/s (+10.2%);
+- server -> client text 64 B: 162.4k/s -> 184.7k/s (+13.7%);
+- server -> client text 1 KiB: 143.8k/s -> 165.2k/s (+14.9%);
+- server -> client text 16 KiB: 55.0k/s -> 60.3k/s (+9.7%).
+
+Binary results were essentially unchanged, confirming that the gain is from
+removing the Perl text encode/validation path rather than an unrelated
+transport change.
+
+The full same-run engine benchmark on an AMD EPYC 7763 shows the combined
+optimized bq path at approximately:
+
+- binary 64 B: 87.9-90.1k/s;
+- binary 1 KiB: 81.8-82.2k/s;
+- binary 16 KiB: 15.0-19.6k/s;
+- text 64 B: 94.6-95.8k/s;
+- text 1 KiB: 83.4-83.7k/s;
+- text 16 KiB: 25.0-25.7k/s;
+- binary 64 B / 100 clients: 66.3-66.4k/s;
+- text 64 B / 100 clients: 68.5-70.4k/s.
+
+In that same run wslay measured about 67-69k/s text 64 B, 43-44k/s text
+1 KiB, 5.2k/s text 16 KiB, and 52-54k/s text 64 B / 100 clients. Current main
+was about 27-29k/s, 25-27k/s, 9.8-9.9k/s, and 22k/s respectively.
+
+This branch currently contains the strongest bq integration measured so far:
+direct XS message delivery, Perl-C-API inbound RFC 3629 validation, and native
+outbound send_text validation/encoding.
+
 ### bq Perl C API UTF-8 measurement
 
 Branch: `experiment/bq-perlapi-utf8`. Draft PR: #5.
