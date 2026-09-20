@@ -80,14 +80,14 @@ jobs:
           uname -a
           lscpu | grep -E '^(Model name|CPU\(s\)|Thread|Core|Socket):'
 
-      - name: Run high-concurrency small-text comparison
-        run: bash bench/compare/run-high-concurrency-small-text.sh high-concurrency-small-text.csv
+      - name: Run Linux::Event window-depth sweep
+        run: bash bench/compare/run-linux-event-window-depth.sh linux-event-window-depth.csv
 
       - name: Show results
-        run: cat high-concurrency-small-text.csv
+        run: cat linux-event-window-depth.csv
 
       - name: Upload comparison
         uses: actions/upload-artifact@v4
         with:
-          name: websocket-high-concurrency-comparison
-          path: high-concurrency-small-text.csv
+          name: websocket-window-depth-diagnostic
+          path: linux-event-window-depth.csv
