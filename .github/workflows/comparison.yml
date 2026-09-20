@@ -10,7 +10,7 @@ on:
       - 'lib/Linux/Event/WebSocket/**'
       - '.github/workflows/comparison.yml'
   push:
-    branches: [ main, bench/application-cross-implementation ]
+    branches: [ main, bench/application-cross-implementation, bench/high-concurrency-small-text ]
     paths:
       - '.github/workflows/comparison.yml'
       - 'bench/compare/**'
