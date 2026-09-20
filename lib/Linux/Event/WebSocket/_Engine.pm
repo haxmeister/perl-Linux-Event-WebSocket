@@ -29,6 +29,13 @@ sub new ($class, %option) {
     croak 'new(): max_message_size must be a positive integer'
         if !defined($max_message_size) || ref($max_message_size)
         || "$max_message_size" !~ /\A[0-9]+\z/ || $max_message_size < 1;
+
+    my $native = delete $option{native};
+    croak 'new(): native must be a Linux::Event::WebSocket::_BQ object'
+        if defined($native)
+        && (!blessed($native)
+            || !$native->isa('Linux::Event::WebSocket::_BQ'));
+
     croak 'new(): unknown option(s): ' . join(', ', sort keys %option)
         if %option;
 
@@ -38,7 +45,7 @@ sub new ($class, %option) {
         message_handler_supplied => $message_handler_supplied ? 1 : 0,
         message_handler  => $message_handler,
         max_message_size => 0 + $max_message_size,
-        native           => Linux::Event::WebSocket::_BQ->new(
+        native           => $native // Linux::Event::WebSocket::_BQ->new(
             $endpoint_type,
             $max_message_size,
         ),
