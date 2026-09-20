@@ -8,7 +8,7 @@ use Linux::Event::WebSocket::Server;
 my $port = $ENV{PORT} // 9601;
 my $path = $ENV{SEND_PATH} // 'public';
 my $ack = '{"ok":true}';
-my $frame = chr(0x81, length($ack)) . $ack;
+my $frame = pack('CC', 0x81, length($ack)) . $ack;
 
 die "unknown SEND_PATH=$path\n"
     if $path !~ /\A(?:public|engine|native_deferred|native_immediate|preframed)\z/;
