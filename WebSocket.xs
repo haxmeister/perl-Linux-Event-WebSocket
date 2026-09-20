@@ -395,6 +395,33 @@ lews_raw_call_write(SV *stream, SV *wire)
     return error;
 }
 
+static int
+lews_raw_call_native_ready(SV *stream, SV *native)
+{
+    int ok = 1;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    XPUSHs(stream);
+    XPUSHs(native);
+    PUTBACK;
+    call_method("_websocket_raw_native_ready", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        sv_setsv(ERRSV, &PL_sv_undef);
+        ok = 0;
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return ok;
+}
+
 static void *
 lews_raw_consumer_create(
     pTHX_
