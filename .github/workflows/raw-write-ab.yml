@@ -1,0 +1,131 @@
+name: WebSocket raw write A/B
+
+on:
+  push:
+    branches: [ experiment/raw-write-bypass ]
+    paths:
+      - '.github/workflows/raw-write-ab.yml'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+          npm install --prefix bench/compare
+
+      - name: Prepare baseline and candidate
+        run: |
+          git worktree add /tmp/ws-baseline origin/main
+          cp -a . /tmp/ws-candidate
+          (
+            cd /tmp/ws-baseline
+            perl Makefile.PL
+            make
+          )
+          (
+            cd /tmp/ws-candidate
+            perl Makefile.PL
+            make
+          )
+
+      - name: Run order-balanced A/B
+        run: |
+          cat > /tmp/run-ab.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          out="$PWD/raw-write-ab.csv"
+          echo 'variant,clients,window,round,msg_per_sec' > "$out"
+
+          run_one() {
+              local variant="$1"
+              local tree="$2"
+              local port="$3"
+              local clients="$4"
+              local window="$5"
+              local round="$6"
+
+              PERL5LIB="$tree/blib/lib:$tree/blib/arch" \
+                taskset -c 0 env PORT="$port" BENCH_MODE=application \
+                perl "$tree/bench/compare/servers/linux-event.pl" >/tmp/ws-${variant}.log 2>&1 &
+              local server_pid=$!
+
+              cleanup() {
+                  kill "$server_pid" 2>/dev/null || true
+                  wait "$server_pid" 2>/dev/null || true
+              }
+
+              for _ in {1..200}; do
+                  if timeout 0.1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                      break
+                  fi
+                  if ! kill -0 "$server_pid" 2>/dev/null; then
+                      cat /tmp/ws-${variant}.log >&2
+                      exit 1
+                  fi
+                  sleep 0.05
+              done
+
+              row="$(taskset -c 1 node bench/compare/load.mjs \
+                  --label "$variant" --port "$port" \
+                  --mode application --type text --bytes 64 \
+                  --clients "$clients" --window "$window" \
+                  --warmup 0.75 --seconds 2)"
+              rate="$(echo "$row" | awk -F, '{print $8}')"
+              echo "$variant,$clients,$window,$round,$rate" | tee -a "$out"
+              cleanup
+          }
+
+          for clients in 100 1000; do
+              for window in 1 4; do
+                  for round in 1 2 3 4 5; do
+                      if (( round % 2 )); then
+                          run_one baseline /tmp/ws-baseline 9601 "$clients" "$window" "$round"
+                          run_one candidate /tmp/ws-candidate 9602 "$clients" "$window" "$round"
+                      else
+                          run_one candidate /tmp/ws-candidate 9602 "$clients" "$window" "$round"
+                          run_one baseline /tmp/ws-baseline 9601 "$clients" "$window" "$round"
+                      fi
+                  done
+              done
+          done
+          EOF
+          chmod +x /tmp/run-ab.sh
+          /tmp/run-ab.sh
+
+      - name: Show results
+        run: cat raw-write-ab.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-raw-write-ab
+          path: raw-write-ab.csv
