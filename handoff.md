@@ -2,9 +2,9 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Validated integration branch: `experiment/raw-buffer-abi`
+Current work branch: `bench/high-concurrency-small-text`
 Based on validated native-engine branch: `feature/bq-native-engine`
-Development version: `0.001_002`
+Development version: `0.001_003`
 No CPAN release has been made.
 
 ## Project boundary
@@ -155,9 +155,9 @@ not implemented.
 
 ## Core reentrant-close validation
 
-Linux::Event main commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`
-fixes the raw-consumer reentrant-close accounting bug exposed by the WebSocket
-integration.
+Linux::Event 0.116 current `main` commit
+`007db40e22374c6d7bf8e056b2d354681d20c852` includes the raw-consumer
+provider-replacement and reentrant-close fixes required by this distribution.
 
 Validation is complete against that core commit:
 
@@ -171,7 +171,7 @@ Validation is complete against that core commit:
 
 ## Raw-buffer ABI production integration
 
-Linux::Event 0.115 exposes a protocol-neutral raw native-consumer ABI and now
+Linux::Event 0.116 exposes a protocol-neutral raw native-consumer ABI and now
 supports safe provider replacement across `transition_to()`.
 
 The WebSocket distribution uses two consumers:
@@ -199,8 +199,7 @@ automatic Pong output, normal and simultaneous Close lifecycle, same-read
 HTTP->WebSocket handoff in both directions, open-before-message ordering, and
 reentrant application abort/close.
 
-The full production suite is green on Perl 5.36 and 5.44 against Linux::Event
-core commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`, and the generated
+The full production suite is green on Perl 5.36 and 5.44 against Linux::Event 0.116 current main commit `007db40e22374c6d7bf8e056b2d354681d20c852`, and the generated
 distribution archive rebuilds and passes its tests.
 
 The focused raw boundary benchmark showed gains ranging from about +1.5% at
@@ -223,12 +222,44 @@ These are hosted-runner measurements and should be treated as architectural
 evidence rather than portable absolute throughput claims.
 
 
+## Current performance agenda
+
+The high-concurrency small-text comparison is complete against Linux::Event
+0.116/main.
+
+With one outstanding application request per connection, five-sample medians
+for Linux::Event::WebSocket were approximately:
+
+- 64 B: 26.7k/s at 20 clients, 27.4k/s at 100, 23.0k/s at 500, and
+  23.8k/s at 1000;
+- 256 B: 26.2k/s at 20 clients, 25.6k/s at 100, 21.3k/s at 500, and
+  22.8k/s at 1000.
+
+At 1000 clients the same-run 64-byte medians were about 6.1k/s for
+Mojolicious, 36.0k/s for Node ws, and 26.9k/s for Gorilla. The corresponding
+256-byte medians were about 6.3k/s, 35.1k/s, and 25.6k/s.
+
+A Linux::Event-only window-depth diagnostic then measured 64-byte application
+traffic with windows of 1, 4, and 16. At 1000 clients the medians were about
+23.3k/s, 50.3k/s, and 56.6k/s respectively. Window 16 stayed around 56-59k/s
+from 20 through 1000 clients.
+
+Conclusion: the remaining small-text request/ack gap is primarily exposed by
+per-roundtrip scheduling/dispatch latency. The native RFC6455 parser is not the
+first optimization target. The next useful investigation should trace the
+message-callback -> send_text -> Stream write/flush path and event-loop
+turnaround cost before considering more protocol-parser optimization.
+
+The diagnostic tooling is retained under `bench/compare/` and is run manually
+through the `WebSocket high-concurrency comparison` workflow so normal CI is
+not lengthened.
+
 ## Core boundary
 
 Do not modify Linux::Event core from this WebSocket project without explicit
 authorization. The generic raw-consumer, provider-replacement, and reentrant
 terminal-accounting facilities required by this integration now exist in
-Linux::Event 0.115/main and are consumed here without WebSocket-specific core
+Linux::Event 0.116/main and are consumed here without WebSocket-specific core
 code.
 
 A separate timer-fairness issue was observed under sustained ready I/O, but it
