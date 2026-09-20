@@ -244,6 +244,10 @@ lews_raw_stream_config(
 )
 {
     int count;
+    SV *config;
+    AV *values;
+    SV **endpoint;
+    SV **limit;
     const char *value;
     STRLEN value_len;
     dSP;
@@ -253,10 +257,11 @@ lews_raw_stream_config(
     PUSHMARK(SP);
     XPUSHs(stream);
     PUTBACK;
-    count = call_method("_websocket_raw_config", G_ARRAY | G_EVAL);
+    sv_setsv(ERRSV, &PL_sv_undef);
+    count = call_method("_websocket_raw_config", G_SCALAR | G_EVAL);
     SPAGAIN;
 
-    if (SvTRUE(ERRSV) || count != 2) {
+    if (SvTRUE(ERRSV) || count != 1) {
         sv_setsv(ERRSV, &PL_sv_undef);
         PUTBACK;
         FREETMPS;
@@ -264,11 +269,36 @@ lews_raw_stream_config(
         return 0;
     }
 
-    *max_message_size = POPu;
-    value = SvPV(POPs, value_len);
+    config = POPs;
+    if (!SvROK(config) || SvTYPE(SvRV(config)) != SVt_PVAV) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
 
+    values = (AV *)SvRV(config);
+    endpoint = av_fetch(values, 0, 0);
+    limit = av_fetch(values, 1, 0);
+    if (endpoint == NULL || limit == NULL
+        || !SvOK(*endpoint) || !SvOK(*limit)) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+
+    value = SvPV(*endpoint, value_len);
     if (value_len != 6
         || (!memEQ(value, "client", 6) && !memEQ(value, "server", 6))) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+
+    *max_message_size = SvUV(*limit);
+    if (*max_message_size == 0) {
         PUTBACK;
         FREETMPS;
         LEAVE;
@@ -281,8 +311,7 @@ lews_raw_stream_config(
     PUTBACK;
     FREETMPS;
     LEAVE;
-
-    return *max_message_size > 0;
+    return 1;
 }
 
 static SV *
