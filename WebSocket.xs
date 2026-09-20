@@ -232,6 +232,7 @@ typedef struct {
     void *host_context;
     SV *stream;
     SV *native;
+    SV *engine;
     lews_bq *bq;
 } lews_raw_consumer;
 
@@ -315,32 +316,9 @@ lews_raw_stream_config(
 }
 
 static SV *
-lews_raw_call_invalid_utf8(SV *stream)
-{
-    SV *error = NULL;
-    dSP;
-
-    ENTER;
-    SAVETMPS;
-    PUSHMARK(SP);
-    XPUSHs(stream);
-    PUTBACK;
-    sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_websocket_raw_invalid_utf8", G_DISCARD | G_EVAL);
-    SPAGAIN;
-    if (SvTRUE(ERRSV)) {
-        error = newSVsv(ERRSV);
-        sv_setsv(ERRSV, &PL_sv_undef);
-    }
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    return error;
-}
-
-static SV *
-lews_raw_call_event(
-    SV *stream,
+lews_raw_call_engine_event(
+    SV *engine,
+    SV *connection,
     IV opcode,
     const char *data,
     size_t size,
@@ -355,24 +333,27 @@ lews_raw_call_event(
     if (payload == NULL) {
         if (needs_complete != NULL)
             *needs_complete = 1;
-        return lews_raw_call_invalid_utf8(stream);
+        return lews_bq_call_invalid_utf8(engine, connection);
     }
 
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    EXTEND(SP, 3);
-    XPUSHs(stream);
-    XPUSHs(sv_2mortal(newSViv(opcode)));
-    XPUSHs(sv_2mortal(payload));
+    EXTEND(SP, 4);
+    PUSHs(engine);
+    PUSHs(connection);
+    PUSHs(sv_2mortal(newSViv(opcode)));
+    PUSHs(sv_2mortal(payload));
     PUTBACK;
     sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_websocket_raw_event", G_DISCARD | G_EVAL);
+    call_method("_bq_event", G_DISCARD | G_EVAL);
     SPAGAIN;
+
     if (SvTRUE(ERRSV)) {
         error = newSVsv(ERRSV);
         sv_setsv(ERRSV, &PL_sv_undef);
     }
+
     PUTBACK;
     FREETMPS;
     LEAVE;
@@ -380,7 +361,7 @@ lews_raw_call_event(
 }
 
 static SV *
-lews_raw_call_error(SV *stream, bqws_error error_code)
+lews_raw_call_engine_error(SV *engine, bqws_error error_code)
 {
     SV *error = NULL;
     dSP;
@@ -389,17 +370,19 @@ lews_raw_call_error(SV *stream, bqws_error error_code)
     SAVETMPS;
     PUSHMARK(SP);
     EXTEND(SP, 3);
-    XPUSHs(stream);
-    XPUSHs(sv_2mortal(newSViv((IV)error_code)));
-    XPUSHs(sv_2mortal(newSVpv(bqws_error_str(error_code), 0)));
+    PUSHs(engine);
+    PUSHs(sv_2mortal(newSViv((IV)error_code)));
+    PUSHs(sv_2mortal(newSVpv(bqws_error_str(error_code), 0)));
     PUTBACK;
     sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_websocket_raw_error", G_DISCARD | G_EVAL);
+    call_method("_handle_bq_error", G_DISCARD | G_EVAL);
     SPAGAIN;
+
     if (SvTRUE(ERRSV)) {
         error = newSVsv(ERRSV);
         sv_setsv(ERRSV, &PL_sv_undef);
     }
+
     PUTBACK;
     FREETMPS;
     LEAVE;
@@ -434,10 +417,11 @@ lews_raw_call_write(SV *stream, SV *wire)
     return error;
 }
 
-static int
+static SV *
 lews_raw_call_native_ready(SV *stream, SV *native)
 {
-    int ok = 1;
+    SV *engine = NULL;
+    int count;
     dSP;
 
     ENTER;
@@ -448,21 +432,25 @@ lews_raw_call_native_ready(SV *stream, SV *native)
     XPUSHs(native);
     PUTBACK;
     sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_websocket_raw_native_ready", G_DISCARD | G_EVAL);
+    count = call_method("_websocket_raw_native_ready", G_SCALAR | G_EVAL);
     SPAGAIN;
 
-    if (SvTRUE(ERRSV)) {
+    if (!SvTRUE(ERRSV) && count == 1) {
+        SV *result = POPs;
+        if (SvROK(result)
+            && sv_derived_from(result, "Linux::Event::WebSocket::_Engine"))
+            engine = newSVsv(result);
+    } else {
         sv_setsv(ERRSV, &PL_sv_undef);
-        ok = 0;
     }
 
     PUTBACK;
     FREETMPS;
     LEAVE;
-    return ok;
+    return engine;
 }
 static SV *
-lews_raw_call_complete(SV *stream)
+lews_raw_call_complete(SV *engine, SV *stream)
 {
     SV *error = NULL;
     dSP;
@@ -470,10 +458,12 @@ lews_raw_call_complete(SV *stream)
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    XPUSHs(stream);
+    EXTEND(SP, 2);
+    PUSHs(engine);
+    PUSHs(stream);
     PUTBACK;
     sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_websocket_raw_complete", G_DISCARD | G_EVAL);
+    call_method("_finish_feed", G_DISCARD | G_EVAL);
     SPAGAIN;
 
     if (SvTRUE(ERRSV)) {
@@ -510,8 +500,10 @@ lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
         return -2;
 
     context->bq = lews_bq_from_sv(context->native);
+    context->engine =
+        lews_raw_call_native_ready(context->stream, context->native);
 
-    if (!lews_raw_call_native_ready(context->stream, context->native)) {
+    if (context->engine == NULL) {
         context->bq = NULL;
         SvREFCNT_dec(context->native);
         context->native = NULL;
@@ -613,20 +605,23 @@ lews_raw_consumer_input(
         && (msg = bqws_recv(context->bq->ws)) != NULL) {
         switch (msg->type) {
         case BQWS_MSG_TEXT:
-            callback_error = lews_raw_call_event(
+            callback_error = lews_raw_call_engine_event(
+                context->engine,
                 context->stream, 1, msg->data, msg->size,
                 &needs_complete
             );
             break;
         case BQWS_MSG_BINARY:
-            callback_error = lews_raw_call_event(
+            callback_error = lews_raw_call_engine_event(
+                context->engine,
                 context->stream, 2, msg->data, msg->size,
                 &needs_complete
             );
             break;
         case BQWS_MSG_CONTROL_CLOSE:
             needs_complete = 1;
-            callback_error = lews_raw_call_event(
+            callback_error = lews_raw_call_engine_event(
+                context->engine,
                 context->stream, 8, msg->data, msg->size,
                 &needs_complete
             );
@@ -650,7 +645,8 @@ lews_raw_consumer_input(
     error_code = bqws_get_error(context->bq->ws);
     if (callback_error == NULL && error_code != BQWS_OK) {
         needs_complete = 1;
-        callback_error = lews_raw_call_error(context->stream, error_code);
+        callback_error =
+            lews_raw_call_engine_error(context->engine, error_code);
     }
 
     if (callback_error == NULL
@@ -665,7 +661,8 @@ lews_raw_consumer_input(
 
     if (callback_error == NULL && needs_complete
         && !context->host->is_closed(aTHX_ context->host_context))
-        callback_error = lews_raw_call_complete(context->stream);
+        callback_error =
+            lews_raw_call_complete(context->engine, context->stream);
 
     if (used != length && error_code == BQWS_OK
         && bqws_get_state(context->bq->ws) < BQWS_STATE_CLOSING
@@ -711,6 +708,8 @@ lews_raw_consumer_destroy(pTHX_ void *opaque)
         return;
 
     context->bq = NULL;
+    if (context->engine != NULL)
+        SvREFCNT_dec(context->engine);
     if (context->native != NULL)
         SvREFCNT_dec(context->native);
     if (context->stream != NULL)
