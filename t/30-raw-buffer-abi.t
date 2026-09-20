@@ -9,7 +9,9 @@ use Linux::Event::Framer ();
 use Linux::Event::Kernel::Timer;
 use Linux::Event::Loop;
 use Linux::Event::WebSocket::_BQ ();
+use Linux::Event::WebSocket::_Engine ();
 use Linux::Event::WebSocket::_Frame;
+use Scalar::Util qw(refaddr);
 
 {
     package Linux::Event::WebSocket::_RawABITestConnection;
@@ -19,16 +21,37 @@ use Linux::Event::WebSocket::_Frame;
     sub _websocket_raw_endpoint_type ($self) { 'server' }
     sub _websocket_raw_max_message_size ($self) { 1024 * 1024 }
 
-    sub _websocket_raw_event ($self, $opcode, $payload) {
+    sub _websocket_raw_native_ready ($self, $native) {
         my $state = $self->data;
-        push @{$state->{events}}, [ $opcode, $payload ];
-        $self->loop->stop if @{$state->{events}} >= $state->{expected};
+        $state->{provider_native} = $native;
+        $self->{raw_engine} = Linux::Event::WebSocket::_Engine->new(
+            connection       => $self,
+            endpoint_type    => 'server',
+            max_message_size => 1024 * 1024,
+            native           => $native,
+            message_handler  => sub ($connection, $payload, $type) {
+                push @{$state->{events}}, [ $type, $payload ];
+                $connection->loop->stop
+                    if @{$state->{events}} >= $state->{expected};
+            },
+        );
+        $state->{engine_native} = $self->{raw_engine}{native};
+        return;
+    }
+
+    sub _websocket_raw_event ($self, $opcode, $payload) {
+        my $engine = $self->{raw_engine}
+            or die "raw WebSocket engine was not attached\n";
+        local $engine->{in_feed} = 1;
+        $engine->_bq_event($self, $opcode, $payload);
         return;
     }
 
     sub _websocket_raw_invalid_utf8 ($self) {
-        push @{$self->data->{errors}}, 'invalid utf8';
-        $self->loop->stop;
+        my $engine = $self->{raw_engine}
+            or die "raw WebSocket engine was not attached\n";
+        local $engine->{in_feed} = 1;
+        $engine->_bq_invalid_utf8($self);
         return;
     }
 
@@ -106,10 +129,16 @@ is_deeply(
 is_deeply(
     $state->{events},
     [
-        [ 1, 'hello raw ABI' ],
-        [ 2, "\x00\x01\xff\x7f" ],
+        [ text   => 'hello raw ABI' ],
+        [ binary => "\x00\x01\xff\x7f" ],
     ],
-    'raw native consumer delivers complete text and binary messages',
+    'raw native consumer enters the normal Engine message path',
+);
+
+is(
+    refaddr($state->{provider_native}),
+    refaddr($state->{engine_native}),
+    'raw consumer and Engine share one bq native state object',
 );
 
 ok(
