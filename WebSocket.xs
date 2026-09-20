@@ -325,6 +325,7 @@ lews_raw_call_invalid_utf8(SV *stream)
     PUSHMARK(SP);
     XPUSHs(stream);
     PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_websocket_raw_invalid_utf8", G_DISCARD | G_EVAL);
     SPAGAIN;
     if (SvTRUE(ERRSV)) {
@@ -361,6 +362,7 @@ lews_raw_call_event(
     XPUSHs(sv_2mortal(newSViv(opcode)));
     XPUSHs(sv_2mortal(payload));
     PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_websocket_raw_event", G_DISCARD | G_EVAL);
     SPAGAIN;
     if (SvTRUE(ERRSV)) {
@@ -387,6 +389,7 @@ lews_raw_call_error(SV *stream, bqws_error error_code)
     XPUSHs(sv_2mortal(newSViv((IV)error_code)));
     XPUSHs(sv_2mortal(newSVpv(bqws_error_str(error_code), 0)));
     PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_websocket_raw_error", G_DISCARD | G_EVAL);
     SPAGAIN;
     if (SvTRUE(ERRSV)) {
@@ -412,6 +415,7 @@ lews_raw_call_write(SV *stream, SV *wire)
     XPUSHs(stream);
     XPUSHs(wire);
     PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("write", G_DISCARD | G_EVAL);
     SPAGAIN;
     if (SvTRUE(ERRSV)) {
@@ -437,6 +441,7 @@ lews_raw_call_native_ready(SV *stream, SV *native)
     XPUSHs(stream);
     XPUSHs(native);
     PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_websocket_raw_native_ready", G_DISCARD | G_EVAL);
     SPAGAIN;
 
