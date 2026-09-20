@@ -427,6 +427,25 @@ lews_raw_call_native_ready(SV *stream, SV *native)
     return engine;
 }
 static SV *
+lews_engine_native(SV *engine)
+{
+    HV *state;
+    SV **slot;
+
+    if (!SvROK(engine) || SvTYPE(SvRV(engine)) != SVt_PVHV)
+        return NULL;
+
+    state = (HV *)SvRV(engine);
+    slot = hv_fetchs(state, "native", 0);
+    if (slot == NULL || !SvOK(*slot)
+        || !SvROK(*slot)
+        || !sv_derived_from(*slot, "Linux::Event::WebSocket::_BQ"))
+        return NULL;
+
+    return newSVsv(*slot);
+}
+
+static SV *
 lews_raw_call_complete(SV *engine, SV *stream)
 {
     SV *error = NULL;
@@ -485,6 +504,22 @@ lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
         SvREFCNT_dec(context->native);
         context->native = NULL;
         return -3;
+    }
+
+    {
+        SV *engine_native = lews_engine_native(context->engine);
+        if (engine_native == NULL) {
+            context->bq = NULL;
+            SvREFCNT_dec(context->engine);
+            context->engine = NULL;
+            SvREFCNT_dec(context->native);
+            context->native = NULL;
+            return -3;
+        }
+
+        SvREFCNT_dec(context->native);
+        context->native = engine_native;
+        context->bq = lews_bq_from_sv(context->native);
     }
 
     return 1;
@@ -695,6 +730,138 @@ lews_raw_consumer_destroy(pTHX_ void *opaque)
     Safefree(context);
 }
 
+typedef struct {
+    const les_consumer_host_api_v1_t *host;
+    void *host_context;
+    SV *stream;
+} lews_http_bridge_consumer;
+
+static void *
+lews_http_bridge_create(
+    pTHX_
+    const les_consumer_host_api_v1_t *host,
+    void *host_context,
+    SV *stream
+)
+{
+    lews_http_bridge_consumer *context;
+
+    PERL_UNUSED_CONTEXT;
+
+    if (host == NULL
+        || host->abi_version != LES_CONSUMER_ABI_VERSION
+        || host->struct_size < LES_CONSUMER_HOST_V1_RETAIN_REQUIRED_SIZE
+        || host->retain == NULL || host->release == NULL)
+        return NULL;
+
+    Newxz(context, 1, lews_http_bridge_consumer);
+    if (context == NULL)
+        return NULL;
+
+    context->host = host;
+    context->host_context = host_context;
+    context->stream = SvREFCNT_inc(stream);
+    return context;
+}
+
+static int
+lews_http_bridge_input(
+    pTHX_
+    void *opaque,
+    const char *data,
+    size_t length,
+    size_t *consumed
+)
+{
+    lews_http_bridge_consumer *context =
+        (lews_http_bridge_consumer *)opaque;
+    SV *callback_error = NULL;
+    dSP;
+
+    *consumed = 0;
+
+    if (context == NULL || context->host == NULL
+        || context->host->retain == NULL
+        || context->host->release == NULL)
+        return LES_CONSUMER_ERROR;
+
+    if (!context->host->retain(aTHX_ context->host_context))
+        return LES_CONSUMER_ERROR;
+
+    *consumed = length;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    PUSHs(context->stream);
+    PUSHs(sv_2mortal(newSVpvn(data, (STRLEN)length)));
+    PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
+    call_method("_websocket_http_input", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        callback_error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    context->host->release(aTHX_ context->host_context);
+
+    if (callback_error != NULL)
+        croak_sv(callback_error);
+
+    return LES_CONSUMER_CONTINUE;
+}
+
+static void
+lews_http_bridge_event(
+    pTHX_
+    void *opaque,
+    uint32_t event,
+    int error,
+    const char *message
+)
+{
+    PERL_UNUSED_ARG(opaque);
+    PERL_UNUSED_ARG(event);
+    PERL_UNUSED_ARG(error);
+    PERL_UNUSED_ARG(message);
+    PERL_UNUSED_CONTEXT;
+}
+
+static void
+lews_http_bridge_destroy(pTHX_ void *opaque)
+{
+    lews_http_bridge_consumer *context =
+        (lews_http_bridge_consumer *)opaque;
+
+    PERL_UNUSED_CONTEXT;
+    if (context == NULL)
+        return;
+
+    if (context->stream != NULL)
+        SvREFCNT_dec(context->stream);
+    Safefree(context);
+}
+
+static const les_consumer_ops_v1_t lews_http_bridge_consumer_ops = {
+    LES_CONSUMER_ABI_VERSION,
+    sizeof(les_consumer_ops_v1_t),
+    "Linux::Event::WebSocket HTTP handoff bridge",
+    LES_CONSUMER_F_RAW_INPUT,
+    lews_http_bridge_create,
+    NULL,
+    lews_http_bridge_event,
+    lews_http_bridge_destroy,
+    NULL,
+    lews_http_bridge_input
+};
+
 static const les_consumer_ops_v1_t lews_raw_consumer_ops = {
     LES_CONSUMER_ABI_VERSION,
     sizeof(les_consumer_ops_v1_t),
@@ -716,6 +883,13 @@ UV
 _raw_consumer_operations_address()
 CODE:
     RETVAL = PTR2UV(&lews_raw_consumer_ops);
+OUTPUT:
+    RETVAL
+
+UV
+_http_bridge_consumer_operations_address()
+CODE:
+    RETVAL = PTR2UV(&lews_http_bridge_consumer_ops);
 OUTPUT:
     RETVAL
 
