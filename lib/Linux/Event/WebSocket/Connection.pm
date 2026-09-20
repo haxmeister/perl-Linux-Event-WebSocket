@@ -129,7 +129,10 @@ sub send_text ($self, $payload) {
     croak 'send_text(): WebSocket connection is closing'
         if $state->{closing};
 
-    return $state->{engine}->send_text($payload);
+    my $engine = $state->{engine};
+    $engine->{native}->queue_message(1, $payload);
+    return 0 if $engine->{in_feed};
+    return $engine->_flush($self);
 }
 
 sub send_binary ($self, $payload) {
