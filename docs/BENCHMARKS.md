@@ -106,6 +106,63 @@ as completed request/ack transactions. The result confirms that the raw-input
 boundary survives integration through the real HTTP Upgrade and public
 WebSocket APIs.
 
+## High-concurrency application scaling
+
+A focused application-style comparison was added after the raw native-consumer
+integration. The workload uses JSON-like text requests, a fixed JSON
+acknowledgement, one outstanding request per connection, and 64-byte or
+256-byte requests. Five samples were taken at 20, 100, 500, and 1000
+connections on the same hosted runner. Linux::Event::WebSocket was built
+against Linux::Event 0.116 from current `main`.
+
+Median 64-byte results were:
+
+| clients | Linux::Event | Mojolicious | Node ws | Gorilla |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 26.7k txn/s | 8.3k | 40.2k | 33.0k |
+| 100 | 27.4k txn/s | 8.4k | 40.4k | 32.2k |
+| 500 | 23.0k txn/s | 6.2k | 38.1k | 27.4k |
+| 1000 | 23.8k txn/s | 6.1k | 36.0k | 26.9k |
+
+Median 256-byte results were:
+
+| clients | Linux::Event | Mojolicious | Node ws | Gorilla |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 26.2k txn/s | 8.1k | 39.5k | 32.2k |
+| 100 | 25.6k txn/s | 7.8k | 38.1k | 31.6k |
+| 500 | 21.3k txn/s | 6.1k | 36.4k | 27.2k |
+| 1000 | 22.8k txn/s | 6.3k | 35.1k | 25.6k |
+
+The Linux::Event result does not show a concurrency collapse. Throughput falls
+moderately after 100 connections and remains stable through 1000. The remaining
+gap to Node/Gorilla in this workload is therefore not explained by a simple
+high-connection-count failure.
+
+A follow-up Linux::Event-only window-depth sweep separated protocol throughput
+from one-request-at-a-time round-trip latency. It used 64-byte application
+requests and the same 20/100/500/1000 connection counts. Median results were:
+
+| clients | window 1 | window 4 | window 16 |
+| ---: | ---: | ---: | ---: |
+| 20 | 26.9k txn/s | 54.1k | 59.2k |
+| 100 | 27.4k txn/s | 52.9k | 56.5k |
+| 500 | 23.7k txn/s | 52.4k | 56.9k |
+| 1000 | 23.3k txn/s | 50.3k | 56.6k |
+
+The large jump from window 1 to window 4, followed by a much smaller gain from
+4 to 16, is strong evidence that the one-outstanding-request case is dominated
+by per-roundtrip scheduling/dispatch latency rather than RFC6455 parsing
+throughput. At window 16 the server sustains roughly 56-59k transactions/s
+across 20 through 1000 clients.
+
+The diagnostic scripts are:
+
+- `bench/compare/run-high-concurrency-small-text.sh`;
+- `bench/compare/run-linux-event-window-depth.sh`.
+
+The manual `WebSocket high-concurrency comparison` GitHub Actions workflow
+runs both diagnostics without lengthening normal CI.
+
 ## Method
 
 Repository author benchmarks live under `bench/`.
