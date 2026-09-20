@@ -37,9 +37,9 @@ workloads, and survived the full correctness gates.
 
 Linux::Event 0.115 adds a raw native-consumer ABI that exposes the borrowed
 ordered-byte input window before core materializes the read as a Perl SV.
-`bench/raw-input-boundary.pl` compares that path against the current
-established WebSocket receive boundary while keeping the same bq protocol
-engine and the same `_Engine` application delivery.
+`bench/raw-input-boundary.pl` was used to compare that path against the
+previous `on_data -> _Engine::feed` receive boundary while keeping the same
+bq protocol engine and the same `_Engine` application delivery.
 
 The workload is one-way masked client traffic rather than echo. Text cases use
 valid UTF-8 JSON-like payloads containing non-ASCII data; binary cases use byte
@@ -74,19 +74,47 @@ sends from receive callbacks preserve the existing non-reentrant behavior.
 Regression coverage includes split input, text/binary messages, Ping/Pong, and
 Close.
 
-The provider is not yet used by the public client/server path because
-Linux::Event currently forbids changing native-consumer identity during
-`transition_to()`. These measurements therefore establish the value of the
-input boundary and justify finishing the transition capability; they are not
-yet public end-to-end WebSocket throughput claims.
+The raw provider is now the established receive path used by the public client
+and server APIs. The HTTP opening exchange uses a temporary native byte bridge,
+then Linux::Event replaces that provider with the bq WebSocket consumer at the
+101 protocol transition.
+
+### Public application A/B
+
+A same-run public-API comparison built `feature/bq-native-engine` as the
+pre-raw baseline and the raw-ABI integration from the current branch on the
+same GitHub runner. The workload used 20 public WebSocket clients with a window
+of four in-flight requests per connection. Clients sent JSON-like text
+messages; the server performed a small application-level check and returned a
+fixed JSON acknowledgement. HTTP Upgrade time was excluded.
+
+Five alternating baseline/raw samples were collected for each payload size.
+Median results were:
+
+| request payload | pre-raw baseline | raw ABI public path | delta |
+| --- | ---: | ---: | ---: |
+| 256 B | 52,719 txn/s | 59,279 txn/s | +12.4% |
+| 1 KiB | 49,200 txn/s | 55,760 txn/s | +13.3% |
+| 16 KiB | 24,739 txn/s | 28,380 txn/s | +14.7% |
+
+Median ingress throughput moved from 12.87 to 14.47 MiB/s at 256 B, 48.05 to
+54.45 MiB/s at 1 KiB, and 386.54 to 443.44 MiB/s at 16 KiB.
+
+This workload is deliberately not an echo server: request payload and response
+payload differ, application logic runs on the server, and throughput is counted
+as completed request/ack transactions. The result confirms that the raw-input
+boundary survives integration through the real HTTP Upgrade and public
+WebSocket APIs.
 
 ## Method
 
 Repository author benchmarks live under `bench/`.
 
 - `protocol.pl` isolates framing, masking, parsing, and UTF-8 validation.
-- `raw-input-boundary.pl` compares current Perl input delivery with the
+- `raw-input-boundary.pl` compares the old Perl input boundary with the
   Linux::Event raw native-consumer ABI using the same bq/Engine message path.
+- `application.pl` measures public request/ack application traffic with
+  JSON-like text requests and fixed acknowledgements.
 - `echo.pl` measures steady-state round trips through the public WebSocket
   client and server APIs.
 - HTTP Upgrade time is excluded from steady-state measurements.
