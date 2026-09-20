@@ -1,7 +1,8 @@
 # Linux::Event::WebSocket handoff
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
-Integration branch: `experiment/raw-buffer-abi`
+Integration target: `main`
+Validated integration branch: `experiment/raw-buffer-abi`
 Based on validated native-engine branch: `feature/bq-native-engine`
 Development version: `0.001_002`
 No CPAN release has been made.
@@ -150,7 +151,7 @@ not implemented.
 - [x] Validate provider replacement and same-read post-101 delivery.
 - [x] Validate reentrant abort/close on Perl 5.36 and 5.44.
 - [x] Benchmark the public application path against the pre-raw baseline.
-- [ ] Decide whether to merge into `main`.
+- [x] Merge the validated raw-ABI integration into `main`.
 
 ## Core reentrant-close validation
 
