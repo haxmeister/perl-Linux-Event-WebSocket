@@ -86,12 +86,11 @@ sub _websocket_raw_config ($self) {
 }
 
 sub _websocket_raw_native_ready ($self, $native) {
-    my $state = $self->_websocket_state;
-    $self->_prepare_message_handler($state);
-    return $self->_initialize_engine($state, $native);
+    my $state = $self->_ensure_websocket_open($native);
+    return $state->{engine};
 }
 
-sub _ensure_websocket_open ($self) {
+sub _ensure_websocket_open ($self, $native = undef) {
     my $state = $self->SUPER::data;
     return $state
         if ref($state) eq 'Linux::Event::WebSocket::_State'
@@ -101,7 +100,7 @@ sub _ensure_websocket_open ($self) {
     return $state if $state->{open};
 
     $self->_prepare_message_handler($state);
-    $self->_initialize_engine($state);
+    $self->_initialize_engine($state, $native);
     if (my $handshake = $state->{handshake}) {
         $state->{subprotocol} =
             Linux::Event::WebSocket::_Handshake->subprotocol($handshake);
