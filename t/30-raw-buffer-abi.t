@@ -16,10 +16,17 @@ use Linux::Event::WebSocket::_Frame;
     use v5.36;
     use parent 'Linux::Event::IO::Sock::Stream';
 
-    sub _websocket_raw_endpoint_type ($self) { 'server' }
-    sub _websocket_raw_max_message_size ($self) { 1024 * 1024 }
+    sub _websocket_raw_endpoint_type ($self) {
+        warn "rawabi: endpoint config\n";
+        return 'server';
+    }
+    sub _websocket_raw_max_message_size ($self) {
+        warn "rawabi: size config\n";
+        return 1024 * 1024;
+    }
 
     sub _websocket_raw_event ($self, $opcode, $payload) {
+        warn "rawabi: event $opcode\n";
         my $state = $self->data;
         push @{$state->{events}}, [ $opcode, $payload ];
         $self->loop->stop if @{$state->{events}} >= $state->{expected};
@@ -39,13 +46,16 @@ use Linux::Event::WebSocket::_Frame;
     }
 }
 
+warn "rawabi: before declaration\n";
 Linux::Event::Framer->declare_native_consumer(
     'Linux::Event::WebSocket::_RawABITestConnection',
     Linux::Event::WebSocket::_BQ->raw_consumer_definition,
 );
+warn "rawabi: after declaration\n";
 
 socketpair(my $socket, my $peer, AF_UNIX, SOCK_STREAM, PF_UNSPEC)
     or die "socketpair: $!";
+warn "rawabi: after socketpair\n";
 
 my $loop = Linux::Event::Loop->new;
 my $state = {
@@ -54,11 +64,13 @@ my $state = {
     expected => 2,
 };
 
+warn "rawabi: before stream new\n";
 my $stream = Linux::Event::WebSocket::_RawABITestConnection->new(
     loop => $loop,
     fh   => $socket,
     data => $state,
 );
+warn "rawabi: after stream new\n";
 
 my $text = Linux::Event::WebSocket::_Frame->encode(
     text => 'hello raw ABI',
@@ -74,6 +86,7 @@ my $binary = Linux::Event::WebSocket::_Frame->encode(
 my $wire = $text . $binary;
 syswrite($peer, $wire) == length($wire)
     or die "syswrite: $!";
+warn "rawabi: after syswrite\n";
 
 my $guard = Linux::Event::Kernel::Timer->new(
     loop => $loop,
@@ -83,7 +96,9 @@ my $guard = Linux::Event::Kernel::Timer->new(
     },
 );
 
+warn "rawabi: before loop\n";
 $loop->run;
+warn "rawabi: after loop\n";
 $guard->cancel;
 
 is_deeply(
