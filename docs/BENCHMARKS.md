@@ -33,11 +33,60 @@ These are development-runner measurements, not universal performance claims.
 Their role is architectural: the gains were large, repeated across realistic
 workloads, and survived the full correctness gates.
 
+## Raw native-input boundary
+
+Linux::Event 0.115 adds a raw native-consumer ABI that exposes the borrowed
+ordered-byte input window before core materializes the read as a Perl SV.
+`bench/raw-input-boundary.pl` compares that path against the current
+established WebSocket receive boundary while keeping the same bq protocol
+engine and the same `_Engine` application delivery.
+
+The workload is one-way masked client traffic rather than echo. Text cases use
+valid UTF-8 JSON-like payloads containing non-ASCII data; binary cases use byte
+payloads. The producer writes continuously through a nonblocking raw watcher,
+the benchmark warms the path before measurement, and the message callback uses
+a wall-clock cutoff.
+
+A same-run Perl 5.44 hosted-runner sample after direct Engine dispatch measured:
+
+| workload | current Perl input | raw ABI | raw delta |
+| --- | ---: | ---: | ---: |
+| text 64 B | 402,039 msg/s | 407,898 msg/s | +1.5% |
+| binary 64 B | 447,075 msg/s | 455,547 msg/s | +1.9% |
+| text 1 KiB | 286,230 msg/s | 322,621 msg/s | +12.7% |
+| binary 1 KiB | 327,759 msg/s | 384,722 msg/s | +17.4% |
+| text 16 KiB | 48,097 msg/s | 67,860 msg/s | +41.1% |
+| binary 16 KiB | 66,444 msg/s | 108,853 msg/s | +63.8% |
+
+The size-dependent result is consistent with eliminating the Perl read-scalar
+copy: the benefit is small at 64 B, material by 1 KiB, and large at 16 KiB.
+
+An earlier raw adapter revision appeared about 17-18% slower than the current
+path at 64 B. That was not a core-ABI limitation. The adapter sent every
+completed message through a Perl method on the Stream, which then called
+`_Engine::_bq_event`, adding one unnecessary Perl dispatch per message. The
+final provider retains the actual Engine once and invokes `_bq_event`
+directly from XS. Removing that wrapper changed 64-byte traffic from a material
+loss to a small win while increasing the gains at larger payloads.
+
+The raw provider also keeps the Engine `in_feed` guard in XS so application
+sends from receive callbacks preserve the existing non-reentrant behavior.
+Regression coverage includes split input, text/binary messages, Ping/Pong, and
+Close.
+
+The provider is not yet used by the public client/server path because
+Linux::Event currently forbids changing native-consumer identity during
+`transition_to()`. These measurements therefore establish the value of the
+input boundary and justify finishing the transition capability; they are not
+yet public end-to-end WebSocket throughput claims.
+
 ## Method
 
 Repository author benchmarks live under `bench/`.
 
 - `protocol.pl` isolates framing, masking, parsing, and UTF-8 validation.
+- `raw-input-boundary.pl` compares current Perl input delivery with the
+  Linux::Event raw native-consumer ABI using the same bq/Engine message path.
 - `echo.pl` measures steady-state round trips through the public WebSocket
   client and server APIs.
 - HTTP Upgrade time is excluded from steady-state measurements.
