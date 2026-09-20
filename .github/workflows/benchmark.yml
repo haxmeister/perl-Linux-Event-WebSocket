@@ -3,7 +3,7 @@ name: WebSocket benchmarks
 on:
   workflow_dispatch:
   push:
-    branches: [ main, experiment/raw-buffer-abi ]
+    branches: [ main ]
     paths:
       - '.github/workflows/benchmark.yml'
       - 'bench/**'
@@ -51,17 +51,6 @@ jobs:
       - name: Expose built XS
         run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
 
-      - name: Build pre-raw ABI baseline
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch feature/bq-native-engine \
-            https://github.com/haxmeister/perl-Linux-Event-WebSocket.git \
-            /tmp/lews-baseline
-          cd /tmp/lews-baseline
-          perl Makefile.PL
-          make
-
       - name: Record environment
         run: |
           {
@@ -88,26 +77,17 @@ jobs:
           set -o pipefail
           perl -Iblib/lib bench/raw-input-boundary.pl | tee benchmark-raw-input.txt
 
-      - name: Public application A/B benchmark
+      - name: Public application benchmark
         shell: bash
         run: |
           set -euo pipefail
           : > benchmark-application.txt
 
           for bytes in 256 1024 16384; do
-            for repeat in 1 2 3 4 5; do
-              PERL5LIB="/tmp/lews-baseline/blib/lib:/tmp/lews-baseline/blib/arch:${PERL5LIB:-}" \
-                perl bench/application.pl \
-                  --label baseline --bytes "$bytes" \
-                  --clients 20 --window 4 --seconds 1.5 \
-                  | tee -a benchmark-application.txt
-
-              PERL5LIB="$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" \
-                perl bench/application.pl \
-                  --label raw_abi --bytes "$bytes" \
-                  --clients 20 --window 4 --seconds 1.5 \
-                  | tee -a benchmark-application.txt
-            done
+            perl -Iblib/lib bench/application.pl \
+              --label current --bytes "$bytes" \
+              --clients 20 --window 4 --seconds 1.5 \
+              | tee -a benchmark-application.txt
           done
 
       - name: Public API echo benchmark
