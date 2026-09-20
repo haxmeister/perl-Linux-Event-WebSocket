@@ -8,9 +8,25 @@ use parent 'Linux::Event::HTTP::Server::Connection';
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 
+use Linux::Event::Framer ();
 use Linux::Event::Kernel::Timer;
+use Linux::Event::WebSocket::_BQ ();
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
+
+sub can ($class, $name) {
+    return undef if $name eq 'on_data';
+    return UNIVERSAL::can($class, $name);
+}
+
+sub _websocket_http_input ($self, $bytes) {
+    return Linux::Event::HTTP::Server::Connection::on_data($self, $bytes);
+}
+
+Linux::Event::Framer->declare_native_consumer(
+    __PACKAGE__,
+    Linux::Event::WebSocket::_BQ->http_bridge_consumer_definition,
+);
 
 sub new ($class, %option) {
     my $self = $class->SUPER::new(%option);
