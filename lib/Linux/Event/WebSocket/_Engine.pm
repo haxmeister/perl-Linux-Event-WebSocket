@@ -217,24 +217,19 @@ sub _bq_event ($self, $connection, $opcode, $payload) {
     return;
 }
 
-sub feed ($self, $bytes) {
-    my $connection = $self->_connection;
-    return if $self->{failed} || $self->{received_close}
-        || $connection->is_closed;
+sub _handle_bq_error ($self, $error, $error_name) {
+    return if $self->{failed} || !$error;
+    $self->_fail(
+        _failure_message($error, $error_name),
+        $error_name eq 'LIMIT_MAX_RECV_MSG_SIZE' ? 1009
+            : $error_name eq 'BAD_UTF8' ? 1007 : 1002,
+        1,
+    );
+    return;
+}
 
-    $self->{in_feed} = 1;
-    my ($error, $error_name) =
-        $self->{native}->feed($self, $connection, $bytes);
-
-    if (!$self->{failed} && $error) {
-        $self->_fail(
-            _failure_message($error, $error_name),
-            $error_name eq 'LIMIT_MAX_RECV_MSG_SIZE' ? 1009
-                : $error_name eq 'BAD_UTF8' ? 1007 : 1002,
-            1,
-        );
-    }
-
+sub _finish_feed ($self, $connection = undef) {
+    $connection //= $self->_connection;
     $self->{in_feed} = 0;
     $self->_flush($connection) if !$connection->is_closed;
 
@@ -244,6 +239,20 @@ sub feed ($self, $bytes) {
         $self->{pending_end} = 0;
         $connection->end;
     }
+    return;
+}
+
+sub feed ($self, $bytes) {
+    my $connection = $self->_connection;
+    return if $self->{failed} || $self->{received_close}
+        || $connection->is_closed;
+
+    $self->{in_feed} = 1;
+    my ($error, $error_name) =
+        $self->{native}->feed($self, $connection, $bytes);
+
+    $self->_handle_bq_error($error, $error_name);
+    $self->_finish_feed($connection);
     return;
 }
 
