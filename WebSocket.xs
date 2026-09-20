@@ -343,7 +343,8 @@ lews_raw_call_event(
     SV *stream,
     IV opcode,
     const char *data,
-    size_t size
+    size_t size,
+    int *needs_complete
 )
 {
     SV *error = NULL;
@@ -351,8 +352,11 @@ lews_raw_call_event(
     dSP;
 
     payload = lews_bq_payload_sv(opcode, data, size);
-    if (payload == NULL)
+    if (payload == NULL) {
+        if (needs_complete != NULL)
+            *needs_complete = 1;
         return lews_raw_call_invalid_utf8(stream);
+    }
 
     ENTER;
     SAVETMPS;
@@ -396,6 +400,34 @@ lews_raw_call_error(SV *stream, bqws_error error_code)
         error = newSVsv(ERRSV);
         sv_setsv(ERRSV, &PL_sv_undef);
     }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
+static SV *
+lews_raw_call_write(SV *stream, SV *wire)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    XPUSHs(stream);
+    XPUSHs(wire);
+    PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
+    call_method("write", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
     PUTBACK;
     FREETMPS;
     LEAVE;
@@ -531,6 +563,8 @@ lews_raw_consumer_input(
     bqws_msg *msg;
     bqws_error error_code;
     SV *callback_error = NULL;
+    SV *wire = NULL;
+    int needs_complete = 0;
     int result = LES_CONSUMER_CONTINUE;
 
     *consumed = 0;
@@ -580,17 +614,21 @@ lews_raw_consumer_input(
         switch (msg->type) {
         case BQWS_MSG_TEXT:
             callback_error = lews_raw_call_event(
-                context->stream, 1, msg->data, msg->size
+                context->stream, 1, msg->data, msg->size,
+                &needs_complete
             );
             break;
         case BQWS_MSG_BINARY:
             callback_error = lews_raw_call_event(
-                context->stream, 2, msg->data, msg->size
+                context->stream, 2, msg->data, msg->size,
+                &needs_complete
             );
             break;
         case BQWS_MSG_CONTROL_CLOSE:
+            needs_complete = 1;
             callback_error = lews_raw_call_event(
-                context->stream, 8, msg->data, msg->size
+                context->stream, 8, msg->data, msg->size,
+                &needs_complete
             );
             break;
         case BQWS_MSG_CONTROL_PING:
@@ -610,10 +648,22 @@ lews_raw_consumer_input(
     }
 
     error_code = bqws_get_error(context->bq->ws);
-    if (callback_error == NULL && error_code != BQWS_OK)
+    if (callback_error == NULL && error_code != BQWS_OK) {
+        needs_complete = 1;
         callback_error = lews_raw_call_error(context->stream, error_code);
+    }
 
     if (callback_error == NULL
+        && !context->host->is_closed(aTHX_ context->host_context)) {
+        wire = lews_bq_flush(context->bq);
+        if (SvCUR(wire) != 0)
+            callback_error = lews_raw_call_write(context->stream, wire);
+    }
+
+    if (wire != NULL)
+        SvREFCNT_dec(wire);
+
+    if (callback_error == NULL && needs_complete
         && !context->host->is_closed(aTHX_ context->host_context))
         callback_error = lews_raw_call_complete(context->stream);
 
