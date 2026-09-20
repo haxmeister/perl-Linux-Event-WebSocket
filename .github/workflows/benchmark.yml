@@ -72,7 +72,10 @@ jobs:
       - name: Raw input boundary benchmark
         env:
           BENCH_SECONDS: '0.75'
-        run: perl -Iblib/lib bench/raw-input-boundary.pl | tee benchmark-raw-input.txt
+        shell: bash
+        run: |
+          set -o pipefail
+          perl -Iblib/lib bench/raw-input-boundary.pl | tee benchmark-raw-input.txt
 
       - name: Public API echo benchmark
         shell: bash
