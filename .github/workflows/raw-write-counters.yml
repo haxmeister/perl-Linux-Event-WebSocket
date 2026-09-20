@@ -1,0 +1,106 @@
+name: WebSocket native write counter diagnostic
+
+on:
+  push:
+    branches: [ experiment/raw-write-bypass ]
+    paths:
+      - '.github/workflows/raw-write-counters.yml'
+      - 'bench/compare/servers/linux-event.pl'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+      - 'WebSocket.xs'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+          npm install --prefix bench/compare
+
+      - name: Prepare baseline and candidate
+        run: |
+          git worktree add /tmp/ws-baseline origin/main
+          cp -a . /tmp/ws-candidate
+          (cd /tmp/ws-baseline && perl Makefile.PL && make)
+          (cd /tmp/ws-candidate && perl Makefile.PL && make)
+
+      - name: Run counter diagnostic
+        run: |
+          cat > /tmp/run-counters.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          out="$PWD/raw-write-counters.txt"
+          : > "$out"
+
+          run_one() {
+              local variant="$1"
+              local tree="$2"
+              local port="$3"
+              local clients="$4"
+              local window="$5"
+              local log="/tmp/counter-${variant}-${clients}-${window}.log"
+
+              PERL5LIB="$tree/blib/lib:$tree/blib/arch" \
+                taskset -c 0 env PORT="$port" BENCH_MODE=application BENCH_STATS=1 \
+                perl "$PWD/bench/compare/servers/linux-event.pl" >"$log" 2>&1 &
+              local pid=$!
+
+              for _ in {1..200}; do
+                  if timeout 0.1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then break; fi
+                  if ! kill -0 "$pid" 2>/dev/null; then cat "$log"; exit 1; fi
+                  sleep 0.05
+              done
+
+              row="$(taskset -c 1 node bench/compare/load.mjs \
+                  --label "$variant" --port "$port" --mode application \
+                  --type text --bytes 64 --clients "$clients" --window "$window" \
+                  --warmup 0.75 --seconds 2)"
+              sleep 0.1
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+              echo "RESULT $row" | tee -a "$out"
+              grep BENCH_STATS "$log" | tail -1 | sed "s/^/$variant clients=$clients window=$window /" | tee -a "$out"
+          }
+
+          for clients in 100 1000; do
+              for window in 1 4; do
+                  run_one baseline /tmp/ws-baseline 9701 "$clients" "$window"
+                  run_one candidate /tmp/ws-candidate 9702 "$clients" "$window"
+              done
+          done
+          EOF
+          chmod +x /tmp/run-counters.sh
+          /tmp/run-counters.sh
+
+      - name: Show results
+        run: cat raw-write-counters.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-native-write-counters
+          path: raw-write-counters.txt
