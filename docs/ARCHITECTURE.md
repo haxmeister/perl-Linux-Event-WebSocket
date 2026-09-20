@@ -53,24 +53,38 @@ opening exchange. WebSocket state is attached before the request is sent,
 because post-101 bytes may be delivered to the transitioned class before the
 public HTTP `on_upgrade` callback runs.
 
+The two private WebSocket HTTP-connection classes declare a small native
+handoff consumer. During the handshake it materializes the borrowed native
+window into the same byte string expected by the existing HTTP `on_data`
+implementation. It does not parse HTTP itself.
+
+After the 101 handoff, Linux::Event `transition_to()` replaces that temporary
+consumer with the WebSocket bq raw-input consumer while preserving unread
+native bytes. The live object is reblessed before the replacement consumer can
+re-drive those preserved bytes. This lets the first WebSocket frame share the
+same transport read as the HTTP Upgrade without passing established WebSocket
+traffic through Perl `on_data`.
+
 The native WebSocket engine is created with bq's handshake disabled. HTTP
 parsing and Upgrade validation therefore remain outside bq. Production test
-`t/12-upgrade-tail.t` covers the same-read boundary in both directions.
+`t/12-upgrade-tail.t` covers the same-read boundary in both directions and
+requires `open` to precede delivery of a same-read first message.
 
 ## Production data path
 
-Inbound data follows:
+Established inbound data follows:
 
 ```text
-Linux::Event Stream
-    -> Connection::on_data
-    -> _Engine::feed
-    -> _BQ XS adapter
+Linux::Event native ordered-byte buffer
+    -> WebSocket raw consumer in WebSocket.xs
     -> vendored bq_websocket parser/message assembly
-    -> XS RFC 3629 validation for text
+    -> XS RFC 3629 validation for completed text
     -> _Engine direct event delivery
     -> application callback
 ```
+
+No Perl read scalar is created before WebSocket parsing. A payload SV is created
+only for a completed application message that must cross into Perl.
 
 Outbound text follows:
 
@@ -87,42 +101,30 @@ application send_text
 Binary data bypasses UTF-8 validation. Client masking keys come from Linux
 `getrandom(2)`.
 
-### Raw native-input target
+### Raw native-input path
 
-Linux::Event 0.115's raw native-consumer ABI allows an upper protocol layer to
-consume the borrowed ordered-byte input window before core creates a payload
-SV. The WebSocket experiment implements that boundary without moving any
-WebSocket framing policy into Linux::Event core:
+Linux::Event 0.115's raw native-consumer ABI exposes a borrowed ordered-byte
+input window before core creates a Perl read scalar. Linux::Event::WebSocket
+uses that facility as its established receive path without moving any
+WebSocket framing policy into Linux::Event core.
 
-```text
-Linux::Event native ordered-byte buffer
-    -> WebSocket raw consumer in WebSocket.xs
-    -> vendored bq_websocket parser/message assembly
-    -> XS RFC 3629 validation for completed text
-    -> _Engine direct event delivery
-    -> application callback
-```
+The provider and `_Engine` share one `_BQ` object, so inbound parsing,
+outbound sends, Ping/Pong, Close, and error state remain one protocol state
+machine. Provider creation does not re-enter Perl. On first WebSocket input the
+provider obtains connection configuration, creates bq, obtains the actual
+`_Engine` object once, and retains that Engine for direct event delivery.
 
-The raw provider and the normal Engine share one `_BQ` object, so inbound
-parsing, outbound sends, Ping/Pong, Close, and error state remain one protocol
-state machine. Provider creation itself does not re-enter Perl. On first input
-the provider obtains configuration, creates bq, receives the actual `_Engine`
-object once, and retains that Engine for direct event delivery. It preserves
-the Engine's `in_feed` guard while bq drains input so application sends from
-message callbacks keep the same non-reentrant output semantics as the existing
-path.
+The provider preserves the Engine's `in_feed` guard while bq drains input so
+application sends from message callbacks keep the same non-reentrant output
+semantics as the previous path. Linux::Event host retain/release brackets the
+callback-capable input work.
 
-This path is implemented and regression-tested but is not yet the default
-connection path. A WebSocket starts life as a Linux::Event::HTTP connection.
-Current Linux::Event `transition_to()` rejects a transition whose target
-descriptor uses a different native-consumer operations table. Production
-activation therefore requires a core consumer-replacement transition that
-creates the WebSocket consumer after the live object is reblessed and before
-preserved post-101 input is released by `_transition_ready`.
+Linux::Event core remains protocol-neutral. Its responsibilities here are the
+generic raw-input ABI, safe provider replacement during `transition_to()`,
+preservation of unread native input, and correct reentrant terminal teardown.
+The HTTP bridge, bq parser, RFC policy, and WebSocket lifecycle all remain in
+this distribution.
 
-The HTTP connection should not be made to declare a WebSocket consumer merely
-to satisfy that restriction. HTTP continues to own the opening exchange;
-WebSocket owns only the established protocol state.
 
 The adapter compiles bq single-threaded because a connection is owned by one
 Linux::Event loop. bq's automatic Ping and timeout policy is disabled;
@@ -243,8 +245,6 @@ See `docs/BENCHMARKS.md` for representative measurements.
 
 ## Deferred work
 
-- activate the validated raw-input provider once Linux::Event can safely replace
-  a native consumer across `transition_to()`;
 - permessage-deflate negotiation and compression;
 - optional future upstream bq refreshes;
 - async/await-first APIs.
