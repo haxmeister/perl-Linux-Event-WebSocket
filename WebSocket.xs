@@ -315,6 +315,23 @@ lews_raw_stream_config(
     return 1;
 }
 
+static void
+lews_engine_set_in_feed(SV *engine, int value)
+{
+    HV *state;
+    SV **slot;
+
+    if (!SvROK(engine) || SvTYPE(SvRV(engine)) != SVt_PVHV)
+        croak("invalid Linux::Event::WebSocket::_Engine object");
+
+    state = (HV *)SvRV(engine);
+    slot = hv_fetchs(state, "in_feed", 0);
+    if (slot == NULL)
+        croak("WebSocket Engine is missing in_feed state");
+
+    sv_setiv(*slot, value ? 1 : 0);
+}
+
 static SV *
 lews_raw_call_engine_event(
     SV *engine,
@@ -586,6 +603,8 @@ lews_raw_consumer_input(
         return LES_CONSUMER_CONTINUE;
     }
 
+    lews_engine_set_in_feed(context->engine, 1);
+
     while (used < length) {
         size_t n = bqws_read_from(
             context->bq->ws,
@@ -663,6 +682,8 @@ lews_raw_consumer_input(
         && !context->host->is_closed(aTHX_ context->host_context))
         callback_error =
             lews_raw_call_complete(context->engine, context->stream);
+    else
+        lews_engine_set_in_feed(context->engine, 0);
 
     if (used != length && error_code == BQWS_OK
         && bqws_get_state(context->bq->ws) < BQWS_STATE_CLOSING
