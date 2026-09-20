@@ -380,7 +380,7 @@ lews_raw_call_write(SV *stream, SV *wire)
     XPUSHs(wire);
     PUTBACK;
     sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("write", G_DISCARD | G_EVAL);
+    call_method("_websocket_raw_write_fast", G_DISCARD | G_EVAL);
     SPAGAIN;
 
     if (SvTRUE(ERRSV)) {
