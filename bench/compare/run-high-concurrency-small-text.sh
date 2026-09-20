@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Application-style small-text scaling: one outstanding request per connection.
 output="${1:-high-concurrency-small-text.csv}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
