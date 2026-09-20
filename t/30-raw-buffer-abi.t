@@ -71,20 +71,9 @@ my $binary = Linux::Event::WebSocket::_Frame->encode(
     mask_key => "\x05\x06\x07\x08",
 );
 
-my $split = int(length($text) / 2);
-syswrite($peer, substr($text, 0, $split))
-    == $split or die "first syswrite: $!";
-
-my $finish = Linux::Event::Kernel::Timer->new(
-    loop => $loop,
-    after => 0,
-    on_timer => sub ($timer) {
-        my $tail = substr($text, $split) . $binary;
-        syswrite($peer, $tail) == length($tail)
-            or die "second syswrite: $!";
-        return;
-    },
-);
+my $wire = $text . $binary;
+syswrite($peer, $wire) == length($wire)
+    or die "syswrite: $!";
 
 my $guard = Linux::Event::Kernel::Timer->new(
     loop => $loop,
@@ -96,7 +85,6 @@ my $guard = Linux::Event::Kernel::Timer->new(
 
 $loop->run;
 $guard->cancel;
-$finish->cancel;
 
 is_deeply(
     $state->{errors},
