@@ -87,6 +87,43 @@ application send_text
 Binary data bypasses UTF-8 validation. Client masking keys come from Linux
 `getrandom(2)`.
 
+### Raw native-input target
+
+Linux::Event 0.115's raw native-consumer ABI allows an upper protocol layer to
+consume the borrowed ordered-byte input window before core creates a payload
+SV. The WebSocket experiment implements that boundary without moving any
+WebSocket framing policy into Linux::Event core:
+
+```text
+Linux::Event native ordered-byte buffer
+    -> WebSocket raw consumer in WebSocket.xs
+    -> vendored bq_websocket parser/message assembly
+    -> XS RFC 3629 validation for completed text
+    -> _Engine direct event delivery
+    -> application callback
+```
+
+The raw provider and the normal Engine share one `_BQ` object, so inbound
+parsing, outbound sends, Ping/Pong, Close, and error state remain one protocol
+state machine. Provider creation itself does not re-enter Perl. On first input
+the provider obtains configuration, creates bq, receives the actual `_Engine`
+object once, and retains that Engine for direct event delivery. It preserves
+the Engine's `in_feed` guard while bq drains input so application sends from
+message callbacks keep the same non-reentrant output semantics as the existing
+path.
+
+This path is implemented and regression-tested but is not yet the default
+connection path. A WebSocket starts life as a Linux::Event::HTTP connection.
+Current Linux::Event `transition_to()` rejects a transition whose target
+descriptor uses a different native-consumer operations table. Production
+activation therefore requires a core consumer-replacement transition that
+creates the WebSocket consumer after the live object is reblessed and before
+preserved post-101 input is released by `_transition_ready`.
+
+The HTTP connection should not be made to declare a WebSocket consumer merely
+to satisfy that restriction. HTTP continues to own the opening exchange;
+WebSocket owns only the established protocol state.
+
 The adapter compiles bq single-threaded because a connection is owned by one
 Linux::Event loop. bq's automatic Ping and timeout policy is disabled;
 Linux::Event::WebSocket keeps its existing close timer and explicit `ping()`
@@ -206,6 +243,8 @@ See `docs/BENCHMARKS.md` for representative measurements.
 
 ## Deferred work
 
+- activate the validated raw-input provider once Linux::Event can safely replace
+  a native consumer across `transition_to()`;
 - permessage-deflate negotiation and compression;
 - optional future upstream bq refreshes;
 - async/await-first APIs.
