@@ -11,6 +11,7 @@ use Linux::Event::Loop;
 use Linux::Event::WebSocket::_BQ ();
 use Linux::Event::WebSocket::_Engine ();
 use Linux::Event::WebSocket::_Frame;
+use Linux::Event::WebSocket::_Parser;
 use Scalar::Util qw(refaddr);
 
 {
