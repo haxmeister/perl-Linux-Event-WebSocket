@@ -18,8 +18,9 @@ use Scalar::Util qw(refaddr);
     use v5.36;
     use parent 'Linux::Event::IO::Sock::Stream';
 
-    sub _websocket_raw_endpoint_type ($self) { 'server' }
-    sub _websocket_raw_max_message_size ($self) { 1024 * 1024 }
+    sub _websocket_raw_config ($self) {
+        return ('server', 1024 * 1024);
+    }
 
     sub _websocket_raw_native_ready ($self, $native) {
         my $state = $self->data;
