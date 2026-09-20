@@ -140,6 +140,13 @@ not implemented.
 - [x] Review the resulting branch diff for experiment-only files or behavior.
 - [ ] Decide whether to merge into `main`.
 
+## Core reentrant-close validation
+
+Linux::Event main commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`
+fixes the raw-consumer reentrant-close accounting bug exposed by the WebSocket
+integration. The WebSocket integration logic is unchanged for this validation;
+the branch test matrix is rerun against that core commit.
+
 ## Raw-buffer ABI experiment
 
 Linux::Event 0.115 now exposes an append-only raw native-consumer ABI. This
