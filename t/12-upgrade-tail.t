@@ -230,6 +230,10 @@ $server->close;
         'first frame in the HTTP response read survives the protocol transition');
     is($client_state->{status}, 101,
         'client retains the combined Upgrade response');
+    ok(
+        !$websocket_client->connection->can('on_data'),
+        'established client uses native raw input instead of Perl on_data',
+    );
 }
 
 done_testing;
