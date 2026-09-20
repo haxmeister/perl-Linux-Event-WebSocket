@@ -144,8 +144,17 @@ not implemented.
 
 Linux::Event main commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`
 fixes the raw-consumer reentrant-close accounting bug exposed by the WebSocket
-integration. The WebSocket integration logic is unchanged for this validation;
-the branch test matrix is rerun against that core commit.
+integration.
+
+Validation is complete against that core commit:
+
+- Perl 5.36 production tests pass;
+- Perl 5.44 production tests pass;
+- the generated distribution archive rebuilds and passes its tests;
+- same-read HTTP -> WebSocket provider replacement preserves post-101 input;
+- server and client deliver `open` before a same-read first message;
+- application `abort()` and close callbacks may close reentrantly from raw
+  consumer delivery without corrupting core input accounting.
 
 ## Raw-buffer ABI experiment
 
