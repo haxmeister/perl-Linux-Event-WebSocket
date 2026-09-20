@@ -165,6 +165,7 @@ lews_bq_call_invalid_utf8(SV *target, SV *connection)
     PUSHs(connection);
     PUTBACK;
 
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_bq_invalid_utf8", G_DISCARD | G_EVAL);
     SPAGAIN;
 
@@ -186,7 +187,8 @@ lews_bq_call_event(
     SV *connection,
     IV opcode,
     const char *data,
-    size_t size
+    size_t size,
+    int *invalid_utf8
 )
 {
     SV *error = NULL;
@@ -202,6 +204,8 @@ lews_bq_call_event(
     {
         SV *payload = lews_bq_payload_sv(opcode, data, size);
         if (payload == NULL) {
+            if (invalid_utf8 != NULL)
+                *invalid_utf8 = 1;
             FREETMPS;
             LEAVE;
             return lews_bq_call_invalid_utf8(target, connection);
@@ -211,6 +215,7 @@ lews_bq_call_event(
     }
     PUTBACK;
 
+    sv_setsv(ERRSV, &PL_sv_undef);
     call_method("_bq_event", G_DISCARD | G_EVAL);
     SPAGAIN;
 
@@ -330,51 +335,6 @@ lews_engine_set_in_feed(SV *engine, int value)
         croak("WebSocket Engine is missing in_feed state");
 
     sv_setiv(*slot, value ? 1 : 0);
-}
-
-static SV *
-lews_raw_call_engine_event(
-    SV *engine,
-    SV *connection,
-    IV opcode,
-    const char *data,
-    size_t size,
-    int *needs_complete
-)
-{
-    SV *error = NULL;
-    SV *payload;
-    dSP;
-
-    payload = lews_bq_payload_sv(opcode, data, size);
-    if (payload == NULL) {
-        if (needs_complete != NULL)
-            *needs_complete = 1;
-        return lews_bq_call_invalid_utf8(engine, connection);
-    }
-
-    ENTER;
-    SAVETMPS;
-    PUSHMARK(SP);
-    EXTEND(SP, 4);
-    PUSHs(engine);
-    PUSHs(connection);
-    PUSHs(sv_2mortal(newSViv(opcode)));
-    PUSHs(sv_2mortal(payload));
-    PUTBACK;
-    sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("_bq_event", G_DISCARD | G_EVAL);
-    SPAGAIN;
-
-    if (SvTRUE(ERRSV)) {
-        error = newSVsv(ERRSV);
-        sv_setsv(ERRSV, &PL_sv_undef);
-    }
-
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    return error;
 }
 
 static SV *
@@ -624,25 +584,22 @@ lews_raw_consumer_input(
         && (msg = bqws_recv(context->bq->ws)) != NULL) {
         switch (msg->type) {
         case BQWS_MSG_TEXT:
-            callback_error = lews_raw_call_engine_event(
-                context->engine,
-                context->stream, 1, msg->data, msg->size,
-                &needs_complete
+            callback_error = lews_bq_call_event(
+                context->engine, context->stream,
+                1, msg->data, msg->size, &needs_complete
             );
             break;
         case BQWS_MSG_BINARY:
-            callback_error = lews_raw_call_engine_event(
-                context->engine,
-                context->stream, 2, msg->data, msg->size,
-                &needs_complete
+            callback_error = lews_bq_call_event(
+                context->engine, context->stream,
+                2, msg->data, msg->size, &needs_complete
             );
             break;
         case BQWS_MSG_CONTROL_CLOSE:
             needs_complete = 1;
-            callback_error = lews_raw_call_engine_event(
-                context->engine,
-                context->stream, 8, msg->data, msg->size,
-                &needs_complete
+            callback_error = lews_bq_call_event(
+                context->engine, context->stream,
+                8, msg->data, msg->size, &needs_complete
             );
             break;
         case BQWS_MSG_CONTROL_PING:
@@ -814,17 +771,17 @@ PPCODE:
         switch (msg->type) {
         case BQWS_MSG_TEXT:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 1, msg->data, msg->size
+                callback_target, connection, 1, msg->data, msg->size, NULL
             );
             break;
         case BQWS_MSG_BINARY:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 2, msg->data, msg->size
+                callback_target, connection, 2, msg->data, msg->size, NULL
             );
             break;
         case BQWS_MSG_CONTROL_CLOSE:
             callback_error = lews_bq_call_event(
-                callback_target, connection, 8, msg->data, msg->size
+                callback_target, connection, 8, msg->data, msg->size, NULL
             );
             break;
         case BQWS_MSG_CONTROL_PING:
