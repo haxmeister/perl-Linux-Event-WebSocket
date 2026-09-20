@@ -90,6 +90,12 @@ sub _websocket_raw_native_ready ($self, $native) {
     return $state->{engine};
 }
 
+sub _websocket_raw_write_fast ($self, $wire) {
+    my $status = $self->{xs_state}->_write($wire);
+    $self->_request_write_ready if $status & 0x02;
+    return $status & 0x01 ? 1 : 0;
+}
+
 sub _ensure_websocket_open ($self, $native = undef) {
     my $state = $self->SUPER::data;
     return $state
