@@ -32,11 +32,19 @@ handshake_request  handshake_response  data
 
 ## Native engine
 
-Production path:
+Established receive path:
 
 ```text
-Stream -> Connection -> _Engine -> _BQ/XS -> vendored bq_websocket
+Linux::Event native input
+    -> WebSocket raw consumer / bq
+    -> _Engine
+    -> application callback
 ```
+
+The HTTP opening exchange uses a WebSocket-owned temporary native byte bridge
+into the existing Linux::Event::HTTP parser. Linux::Event then replaces that
+provider with the bq WebSocket consumer at the 101 transition while preserving
+post-Upgrade input.
 
 Inbound text is validated in XS with Perl's C UTF-8 API using the RFC 3629
 boundary. Outbound `send_text` validation/encoding is also done in XS. Binary
@@ -138,6 +146,10 @@ not implemented.
 - [x] Autobahn server green on this integration branch.
 - [x] Full cross-implementation comparison completes on this integration branch.
 - [x] Review the resulting branch diff for experiment-only files or behavior.
+- [x] Activate the raw native-consumer path through the real HTTP Upgrade.
+- [x] Validate provider replacement and same-read post-101 delivery.
+- [x] Validate reentrant abort/close on Perl 5.36 and 5.44.
+- [x] Benchmark the public application path against the pre-raw baseline.
 - [ ] Decide whether to merge into `main`.
 
 ## Core reentrant-close validation
@@ -156,81 +168,67 @@ Validation is complete against that core commit:
 - application `abort()` and close callbacks may close reentrantly from raw
   consumer delivery without corrupting core input accounting.
 
-## Raw-buffer ABI experiment
+## Raw-buffer ABI production integration
 
-Linux::Event 0.115 now exposes an append-only raw native-consumer ABI. This
-branch has a WebSocket provider that feeds the borrowed native ordered-byte
-window directly into the same vendored bq engine used by the established
-production path.
+Linux::Event 0.115 exposes a protocol-neutral raw native-consumer ABI and now
+supports safe provider replacement across `transition_to()`.
 
-The provider:
+The WebSocket distribution uses two consumers:
 
-- is declared privately through `_BQ->raw_consumer_definition`;
+1. The private HTTP handshake connection uses a small WebSocket-owned bridge
+   consumer. It materializes the borrowed native window and passes it to the
+   existing Linux::Event::HTTP `on_data` parser. It does not parse HTTP.
+2. After the 101 handoff, Linux::Event replaces that bridge with the bq
+   WebSocket raw consumer. Preserved post-101 bytes are re-driven through bq
+   after the live Stream has been reblessed to the WebSocket connection class.
+
+The established provider:
+
+- is declared through `_BQ->raw_consumer_definition`;
 - does no Perl work during provider `create()`;
-- lazily creates bq on first retained input;
-- returns the actual `_Engine` object to XS once during initialization;
-- dispatches completed messages directly from XS to `_Engine::_bq_event`;
+- lazily creates/adopts bq state on first WebSocket input;
+- retains the actual `_Engine` object for direct XS event delivery;
 - creates payload SVs only for completed application messages;
-- preserves the Engine `in_feed` guard while bq is draining input;
+- preserves the Engine `in_feed` guard while bq drains input;
 - flushes native Ping/Close output through the existing Stream write path;
 - retains/releases the Linux::Event host around callback-capable input work.
 
-The raw regression covers split masked input, text and binary delivery, shared
-bq ownership between provider and Engine, automatic Pong output, and the normal
-Close lifecycle. The full production test suite is green on Perl 5.36 and
-5.44, and the generated distribution archive rebuilds and passes its tests.
+Regression coverage includes split masked input, text/binary delivery,
+automatic Pong output, normal and simultaneous Close lifecycle, same-read
+HTTP->WebSocket handoff in both directions, open-before-message ordering, and
+reentrant application abort/close.
 
-A same-run one-way masked-input benchmark compares the current
-`Stream -> on_data -> Engine::feed -> bq` boundary with
-`Stream -> raw ABI -> bq`, keeping the same Engine application delivery on
-both sides:
+The full production suite is green on Perl 5.36 and 5.44 against Linux::Event
+core commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`, and the generated
+distribution archive rebuilds and passes its tests.
 
-| workload | Perl input | raw ABI | raw delta |
+The focused raw boundary benchmark showed gains ranging from about +1.5% at
+64-byte text to +63.8% at 16 KiB binary when compared with the old
+`on_data -> Engine::feed` boundary.
+
+More importantly, a same-run public application benchmark compared
+`feature/bq-native-engine` with the integrated raw path using 20 public
+clients, four in-flight requests per connection, JSON-like text requests, a
+small server-side application check, and fixed acknowledgements. Five-sample
+medians were:
+
+| payload | pre-raw baseline | raw ABI | delta |
 | --- | ---: | ---: | ---: |
-| text 64 B | 402,039/s | 407,898/s | +1.5% |
-| binary 64 B | 447,075/s | 455,547/s | +1.9% |
-| text 1 KiB | 286,230/s | 322,621/s | +12.7% |
-| binary 1 KiB | 327,759/s | 384,722/s | +17.4% |
-| text 16 KiB | 48,097/s | 67,860/s | +41.1% |
-| binary 16 KiB | 66,444/s | 108,853/s | +63.8% |
+| 256 B | 52,719 txn/s | 59,279 txn/s | +12.4% |
+| 1 KiB | 49,200 txn/s | 55,760 txn/s | +13.3% |
+| 16 KiB | 24,739 txn/s | 28,380 txn/s | +14.7% |
 
-An earlier adapter revision was about 17-18% slower at 64 B because it routed
-every completed raw message through an extra Perl Stream method before reaching
-`_Engine`. Removing that unnecessary wrapper eliminated the small-message
-penalty and exposed the expected copy-avoidance gain as payload size grows.
+These are hosted-runner measurements and should be treated as architectural
+evidence rather than portable absolute throughput claims.
 
-These hosted-runner numbers are architectural evidence, not portable absolute
-performance claims.
-
-### Production activation blocker
-
-The provider is not yet the default established-connection receive path.
-WebSocket begins as a Linux::Event::HTTP connection and uses
-`transition_to()` after the 101 exchange. Linux::Event currently requires the
-source and target descriptors to use the same native-consumer operations table,
-so an HTTP connection with no WebSocket consumer cannot transition to a class
-that declares this provider.
-
-Do not work around this by attaching the WebSocket consumer to the HTTP class
-or by duplicating HTTP parsing. The clean core capability is a safe
-native-consumer replacement during `transition_to()`:
-
-1. validate/stage the target descriptor and provider without releasing input;
-2. rebless the live Perl Stream to the target WebSocket class;
-3. create and install the target consumer against that reblessed object;
-4. only then let `_transition_ready` expose preserved post-101 bytes.
-
-The existing two-phase transition already places the Perl rebless between
-descriptor validation and `_transition_ready`, making that the natural seam.
-Changing Linux::Event core still requires explicit authorization in the current
-chat/project.
 
 ## Core boundary
 
 Do not modify Linux::Event core from this WebSocket project without explicit
-authorization. The raw ABI provider itself is implemented and validated here;
-production activation is waiting on the consumer-replacement transition
-capability described above.
+authorization. The generic raw-consumer, provider-replacement, and reentrant
+terminal-accounting facilities required by this integration now exist in
+Linux::Event 0.115/main and are consumed here without WebSocket-specific core
+code.
 
 A separate timer-fairness issue was observed under sustained ready I/O, but it
 is also outside this repository unless explicitly authorized.
