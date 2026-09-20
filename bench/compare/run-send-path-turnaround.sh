@@ -71,9 +71,9 @@ run_case() {
 port=9601
 for path in public engine native_deferred native_immediate preframed; do
     start_server "$path" "$port"
-    for clients in 20 100 1000; do
+    for clients in 1000; do
         for window in 1 4; do
-            for _ in 1 2 3 4 5; do
+            for _ in 1 2 3; do
                 run_case "$path" "$port" "$clients" "$window"
             done
         done
