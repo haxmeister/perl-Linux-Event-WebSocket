@@ -225,6 +225,7 @@ lews_raw_stream_config(
 )
 {
     int count;
+    SV *result;
     const char *value;
     STRLEN value_len;
     dSP;
@@ -243,7 +244,8 @@ lews_raw_stream_config(
         LEAVE;
         return 0;
     }
-    value = SvPV(POPs, value_len);
+    result = POPs;
+    value = SvPV(result, value_len);
     if ((value_len == 6 && memEQ(value, "client", 6))
         || (value_len == 6 && memEQ(value, "server", 6))) {
         Copy(value, endpoint_type, 6, char);
@@ -272,7 +274,8 @@ lews_raw_stream_config(
         LEAVE;
         return 0;
     }
-    *max_message_size = POPu;
+    result = POPs;
+    *max_message_size = SvUV(result);
     PUTBACK;
     FREETMPS;
     LEAVE;
