@@ -2,7 +2,7 @@ name: WebSocket tests
 
 on:
   push:
-    branches: [ main, experiment/raw-buffer-abi ]
+    branches: [ main ]
   pull_request:
 
 concurrency:
