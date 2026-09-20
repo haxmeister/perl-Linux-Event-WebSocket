@@ -1,7 +1,8 @@
 # Linux::Event::WebSocket handoff
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
-Integration branch: `feature/bq-native-engine`
+Integration branch: `experiment/raw-buffer-abi`
+Based on validated native-engine branch: `feature/bq-native-engine`
 Development version: `0.001_002`
 No CPAN release has been made.
 
@@ -139,11 +140,84 @@ not implemented.
 - [x] Review the resulting branch diff for experiment-only files or behavior.
 - [ ] Decide whether to merge into `main`.
 
+## Raw-buffer ABI experiment
+
+Linux::Event 0.115 now exposes an append-only raw native-consumer ABI. This
+branch has a WebSocket provider that feeds the borrowed native ordered-byte
+window directly into the same vendored bq engine used by the established
+production path.
+
+The provider:
+
+- is declared privately through `_BQ->raw_consumer_definition`;
+- does no Perl work during provider `create()`;
+- lazily creates bq on first retained input;
+- returns the actual `_Engine` object to XS once during initialization;
+- dispatches completed messages directly from XS to `_Engine::_bq_event`;
+- creates payload SVs only for completed application messages;
+- preserves the Engine `in_feed` guard while bq is draining input;
+- flushes native Ping/Close output through the existing Stream write path;
+- retains/releases the Linux::Event host around callback-capable input work.
+
+The raw regression covers split masked input, text and binary delivery, shared
+bq ownership between provider and Engine, automatic Pong output, and the normal
+Close lifecycle. The full production test suite is green on Perl 5.36 and
+5.44, and the generated distribution archive rebuilds and passes its tests.
+
+A same-run one-way masked-input benchmark compares the current
+`Stream -> on_data -> Engine::feed -> bq` boundary with
+`Stream -> raw ABI -> bq`, keeping the same Engine application delivery on
+both sides:
+
+| workload | Perl input | raw ABI | raw delta |
+| --- | ---: | ---: | ---: |
+| text 64 B | 402,039/s | 407,898/s | +1.5% |
+| binary 64 B | 447,075/s | 455,547/s | +1.9% |
+| text 1 KiB | 286,230/s | 322,621/s | +12.7% |
+| binary 1 KiB | 327,759/s | 384,722/s | +17.4% |
+| text 16 KiB | 48,097/s | 67,860/s | +41.1% |
+| binary 16 KiB | 66,444/s | 108,853/s | +63.8% |
+
+An earlier adapter revision was about 17-18% slower at 64 B because it routed
+every completed raw message through an extra Perl Stream method before reaching
+`_Engine`. Removing that unnecessary wrapper eliminated the small-message
+penalty and exposed the expected copy-avoidance gain as payload size grows.
+
+These hosted-runner numbers are architectural evidence, not portable absolute
+performance claims.
+
+### Production activation blocker
+
+The provider is not yet the default established-connection receive path.
+WebSocket begins as a Linux::Event::HTTP connection and uses
+`transition_to()` after the 101 exchange. Linux::Event currently requires the
+source and target descriptors to use the same native-consumer operations table,
+so an HTTP connection with no WebSocket consumer cannot transition to a class
+that declares this provider.
+
+Do not work around this by attaching the WebSocket consumer to the HTTP class
+or by duplicating HTTP parsing. The clean core capability is a safe
+native-consumer replacement during `transition_to()`:
+
+1. validate/stage the target descriptor and provider without releasing input;
+2. rebless the live Perl Stream to the target WebSocket class;
+3. create and install the target consumer against that reblessed object;
+4. only then let `_transition_ready` expose preserved post-101 bytes.
+
+The existing two-phase transition already places the Perl rebless between
+descriptor validation and `_transition_ready`, making that the natural seam.
+Changing Linux::Event core still requires explicit authorization in the current
+chat/project.
+
 ## Core boundary
 
-Do not modify Linux::Event core for this work. A separate timer-fairness issue
-was observed under sustained ready I/O, but it is outside this repository and
-requires explicit authorization.
+Do not modify Linux::Event core from this WebSocket project without explicit
+authorization. The raw ABI provider itself is implemented and validated here;
+production activation is waiting on the consumer-replacement transition
+capability described above.
+
+A separate timer-fairness issue was observed under sustained ready I/O, but it
+is also outside this repository unless explicitly authorized.
 
 ## Files to read first
 
