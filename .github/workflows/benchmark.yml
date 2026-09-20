@@ -3,7 +3,7 @@ name: WebSocket benchmarks
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, experiment/raw-buffer-abi ]
     paths:
       - '.github/workflows/benchmark.yml'
       - 'bench/**'
@@ -69,6 +69,11 @@ jobs:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/candidates.pl | tee benchmark-candidates.txt
 
+      - name: Raw input boundary benchmark
+        env:
+          BENCH_SECONDS: '0.75'
+        run: perl -Iblib/lib bench/raw-input-boundary.pl | tee benchmark-raw-input.txt
+
       - name: Public API echo benchmark
         shell: bash
         run: |
@@ -98,4 +103,5 @@ jobs:
             benchmark-environment.txt
             benchmark-protocol.txt
             benchmark-candidates.txt
+            benchmark-raw-input.txt
             benchmark-echo.txt
