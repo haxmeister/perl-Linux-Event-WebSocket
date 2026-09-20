@@ -433,7 +433,7 @@ lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
 
     if (!lews_raw_stream_config(
             aTHX_ context->stream, endpoint_type, &max_message_size))
-        return 0;
+        return -1;
 
     context->native = lews_bq_new_object(
         "Linux::Event::WebSocket::_BQ",
@@ -441,7 +441,7 @@ lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
         max_message_size
     );
     if (context->native == NULL)
-        return 0;
+        return -2;
 
     context->bq = lews_bq_from_sv(context->native);
 
@@ -449,7 +449,7 @@ lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
         context->bq = NULL;
         SvREFCNT_dec(context->native);
         context->native = NULL;
-        return 0;
+        return -3;
     }
 
     return 1;
@@ -510,9 +510,16 @@ lews_raw_consumer_input(
     if (!context->host->retain(aTHX_ context->host_context))
         return LES_CONSUMER_ERROR;
 
-    if (!lews_raw_consumer_initialize(aTHX_ context)) {
-        context->host->release(aTHX_ context->host_context);
-        return LES_CONSUMER_ERROR;
+    {
+        int init_status = lews_raw_consumer_initialize(aTHX_ context);
+        if (init_status <= 0) {
+            context->host->release(aTHX_ context->host_context);
+            if (init_status == -1)
+                croak("WebSocket raw consumer configuration failed");
+            if (init_status == -2)
+                croak("WebSocket raw consumer bq initialization failed");
+            croak("WebSocket raw consumer Engine handoff failed");
+        }
     }
 
     if (context->host->is_closed(aTHX_ context->host_context)) {
