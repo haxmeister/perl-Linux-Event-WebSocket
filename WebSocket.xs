@@ -244,7 +244,6 @@ lews_raw_stream_config(
 )
 {
     int count;
-    SV *result;
     const char *value;
     STRLEN value_len;
     dSP;
@@ -254,78 +253,36 @@ lews_raw_stream_config(
     PUSHMARK(SP);
     XPUSHs(stream);
     PUTBACK;
-    count = call_method("_websocket_raw_endpoint_type", G_SCALAR | G_EVAL);
+    count = call_method("_websocket_raw_config", G_ARRAY | G_EVAL);
     SPAGAIN;
-    if (SvTRUE(ERRSV) || count != 1) {
-        sv_setsv(ERRSV, &PL_sv_undef);
-        PUTBACK;
-        FREETMPS;
-        LEAVE;
-        return 0;
-    }
-    result = POPs;
-    value = SvPV(result, value_len);
-    if ((value_len == 6 && memEQ(value, "client", 6))
-        || (value_len == 6 && memEQ(value, "server", 6))) {
-        Copy(value, endpoint_type, 6, char);
-        endpoint_type[6] = '\0';
-    } else {
-        PUTBACK;
-        FREETMPS;
-        LEAVE;
-        return 0;
-    }
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
 
-    ENTER;
-    SAVETMPS;
-    PUSHMARK(SP);
-    XPUSHs(stream);
-    PUTBACK;
-    count = call_method("_websocket_raw_max_message_size", G_SCALAR | G_EVAL);
-    SPAGAIN;
-    if (SvTRUE(ERRSV) || count != 1) {
+    if (SvTRUE(ERRSV) || count != 2) {
         sv_setsv(ERRSV, &PL_sv_undef);
         PUTBACK;
         FREETMPS;
         LEAVE;
         return 0;
     }
-    result = POPs;
-    *max_message_size = SvUV(result);
+
+    *max_message_size = POPu;
+    value = SvPV(POPs, value_len);
+
+    if (value_len != 6
+        || (!memEQ(value, "client", 6) && !memEQ(value, "server", 6))) {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+
+    Copy(value, endpoint_type, 6, char);
+    endpoint_type[6] = '\0';
+
     PUTBACK;
     FREETMPS;
     LEAVE;
 
     return *max_message_size > 0;
-}
-
-
-static int
-lews_raw_call_native_ready(SV *stream, SV *native)
-{
-    int ok = 1;
-    dSP;
-
-    ENTER;
-    SAVETMPS;
-    PUSHMARK(SP);
-    EXTEND(SP, 2);
-    XPUSHs(stream);
-    XPUSHs(native);
-    PUTBACK;
-    call_method("_websocket_raw_native_ready", G_DISCARD | G_EVAL);
-    SPAGAIN;
-    if (SvTRUE(ERRSV)) {
-        sv_setsv(ERRSV, &PL_sv_undef);
-        ok = 0;
-    }
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    return ok;
 }
 
 static SV *
