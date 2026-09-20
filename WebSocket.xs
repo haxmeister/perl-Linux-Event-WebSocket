@@ -1,6 +1,7 @@
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
+#include "stream_consumer_abi.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -18,6 +19,57 @@
 typedef struct {
     bqws_socket *ws;
 } lews_bq;
+
+static lews_bq *
+lews_bq_create(const char *endpoint_type, UV max_message_size)
+{
+    lews_bq *state;
+    bqws_opts opts;
+
+    Newxz(state, 1, lews_bq);
+    Zero(&opts, 1, bqws_opts);
+
+    opts.skip_handshake = true;
+    opts.recv_control_messages = true;
+    opts.ping_interval = SIZE_MAX;
+    opts.connect_timeout = SIZE_MAX;
+    opts.close_timeout = SIZE_MAX;
+    opts.ping_response_timeout = SIZE_MAX;
+    opts.limits.max_memory_used = SIZE_MAX;
+    opts.limits.max_recv_msg_size =
+        (size_t)(max_message_size < 125 ? 125 : max_message_size);
+    opts.limits.max_recv_queue_messages = SIZE_MAX;
+    opts.limits.max_recv_queue_size = SIZE_MAX;
+    opts.limits.max_partial_message_parts = SIZE_MAX;
+
+    if (strEQ(endpoint_type, "client")) {
+        state->ws = bqws_new_client(&opts, NULL);
+    } else if (strEQ(endpoint_type, "server")) {
+        state->ws = bqws_new_server(&opts, NULL);
+    } else {
+        Safefree(state);
+        return NULL;
+    }
+
+    if (state->ws == NULL) {
+        Safefree(state);
+        return NULL;
+    }
+
+    return state;
+}
+
+static void
+lews_bq_free(lews_bq *state)
+{
+    if (state == NULL)
+        return;
+    if (state->ws != NULL) {
+        bqws_free_socket(state->ws);
+        state->ws = NULL;
+    }
+    Safefree(state);
+}
 
 static lews_bq *
 lews_bq_from_sv(SV *self)
@@ -156,9 +208,389 @@ lews_bq_call_event(
     return error;
 }
 
+
+typedef struct {
+    const les_consumer_host_api_v1_t *host;
+    void *host_context;
+    SV *stream;
+    lews_bq *bq;
+} lews_raw_consumer;
+
+static int
+lews_raw_stream_config(
+    pTHX_
+    SV *stream,
+    char endpoint_type[7],
+    UV *max_message_size
+)
+{
+    int count;
+    const char *value;
+    STRLEN value_len;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(stream);
+    PUTBACK;
+    count = call_method("_websocket_raw_endpoint_type", G_SCALAR | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV) || count != 1) {
+        sv_setsv(ERRSV, &PL_sv_undef);
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+    value = SvPV(POPs, value_len);
+    if ((value_len == 6 && memEQ(value, "client", 6))
+        || (value_len == 6 && memEQ(value, "server", 6))) {
+        Copy(value, endpoint_type, 6, char);
+        endpoint_type[6] = '\0';
+    } else {
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(stream);
+    PUTBACK;
+    count = call_method("_websocket_raw_max_message_size", G_SCALAR | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV) || count != 1) {
+        sv_setsv(ERRSV, &PL_sv_undef);
+        PUTBACK;
+        FREETMPS;
+        LEAVE;
+        return 0;
+    }
+    *max_message_size = POPu;
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+
+    return *max_message_size > 0;
+}
+
+static SV *
+lews_raw_call_invalid_utf8(SV *stream)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(stream);
+    PUTBACK;
+    call_method("_websocket_raw_invalid_utf8", G_DISCARD | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
+static SV *
+lews_raw_call_event(
+    SV *stream,
+    IV opcode,
+    const char *data,
+    size_t size
+)
+{
+    SV *error = NULL;
+    SV *payload;
+    dSP;
+
+    payload = lews_bq_payload_sv(opcode, data, size);
+    if (payload == NULL)
+        return lews_raw_call_invalid_utf8(stream);
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 3);
+    XPUSHs(stream);
+    XPUSHs(sv_2mortal(newSViv(opcode)));
+    XPUSHs(sv_2mortal(payload));
+    PUTBACK;
+    call_method("_websocket_raw_event", G_DISCARD | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
+static SV *
+lews_raw_call_error(SV *stream, bqws_error error_code)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 3);
+    XPUSHs(stream);
+    XPUSHs(sv_2mortal(newSViv((IV)error_code)));
+    XPUSHs(sv_2mortal(newSVpv(bqws_error_str(error_code), 0)));
+    PUTBACK;
+    call_method("_websocket_raw_error", G_DISCARD | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
+static SV *
+lews_raw_call_write(SV *stream, SV *wire)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    XPUSHs(stream);
+    XPUSHs(wire);
+    PUTBACK;
+    call_method("write", G_DISCARD | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
+static void *
+lews_raw_consumer_create(
+    pTHX_
+    const les_consumer_host_api_v1_t *host,
+    void *host_context,
+    SV *stream
+)
+{
+    lews_raw_consumer *context;
+    char endpoint_type[7];
+    UV max_message_size;
+
+    if (host == NULL
+        || host->abi_version != LES_CONSUMER_ABI_VERSION
+        || host->struct_size < LES_CONSUMER_HOST_V1_RETAIN_REQUIRED_SIZE
+        || host->retain == NULL || host->release == NULL)
+        return NULL;
+
+    if (!lews_raw_stream_config(
+            aTHX_ stream, endpoint_type, &max_message_size))
+        return NULL;
+
+    Newxz(context, 1, lews_raw_consumer);
+    if (context == NULL)
+        return NULL;
+
+    context->bq = lews_bq_create(endpoint_type, max_message_size);
+    if (context->bq == NULL) {
+        Safefree(context);
+        return NULL;
+    }
+
+    context->host = host;
+    context->host_context = host_context;
+    context->stream = SvREFCNT_inc(stream);
+    return context;
+}
+
+static int
+lews_raw_consumer_input(
+    pTHX_
+    void *opaque,
+    const char *data,
+    size_t length,
+    size_t *consumed
+)
+{
+    lews_raw_consumer *context = (lews_raw_consumer *)opaque;
+    size_t used = 0;
+    bqws_msg *msg;
+    bqws_error error_code;
+    SV *callback_error = NULL;
+    SV *wire = NULL;
+    int result = LES_CONSUMER_CONTINUE;
+
+    *consumed = 0;
+
+    if (context == NULL || context->bq == NULL
+        || context->host == NULL || context->host->retain == NULL
+        || context->host->release == NULL)
+        return LES_CONSUMER_ERROR;
+
+    if (!context->host->retain(aTHX_ context->host_context))
+        return LES_CONSUMER_ERROR;
+
+    while (used < length) {
+        size_t n = bqws_read_from(
+            context->bq->ws,
+            data + used,
+            length - used
+        );
+        if (n == 0)
+            break;
+        used += n;
+        if (bqws_get_error(context->bq->ws) != BQWS_OK
+            || bqws_get_state(context->bq->ws) >= BQWS_STATE_CLOSING)
+            break;
+    }
+    *consumed = used;
+
+    while (callback_error == NULL
+        && (msg = bqws_recv(context->bq->ws)) != NULL) {
+        switch (msg->type) {
+        case BQWS_MSG_TEXT:
+            callback_error = lews_raw_call_event(
+                context->stream, 1, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_BINARY:
+            callback_error = lews_raw_call_event(
+                context->stream, 2, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_CLOSE:
+            callback_error = lews_raw_call_event(
+                context->stream, 8, msg->data, msg->size
+            );
+            break;
+        case BQWS_MSG_CONTROL_PING:
+        case BQWS_MSG_CONTROL_PONG:
+            break;
+        default:
+            callback_error = newSVpvf(
+                "unexpected bq_websocket message type %d",
+                (int)msg->type
+            );
+            break;
+        }
+        bqws_free_msg(msg);
+
+        if (context->host->is_closed(aTHX_ context->host_context))
+            break;
+    }
+
+    error_code = bqws_get_error(context->bq->ws);
+    if (callback_error == NULL && error_code != BQWS_OK)
+        callback_error = lews_raw_call_error(context->stream, error_code);
+
+    if (callback_error == NULL
+        && !context->host->is_closed(aTHX_ context->host_context)) {
+        wire = lews_bq_flush(context->bq);
+        if (SvCUR(wire) != 0)
+            callback_error = lews_raw_call_write(context->stream, wire);
+    }
+
+    if (wire != NULL)
+        SvREFCNT_dec(wire);
+
+    if (used != length && error_code == BQWS_OK
+        && bqws_get_state(context->bq->ws) < BQWS_STATE_CLOSING
+        && callback_error == NULL) {
+        callback_error = newSVpvf(
+            "bq_websocket consumed only %lu of %lu raw input bytes",
+            (unsigned long)used,
+            (unsigned long)length
+        );
+    }
+
+    context->host->release(aTHX_ context->host_context);
+
+    if (callback_error != NULL)
+        croak_sv(callback_error);
+
+    return result;
+}
+
+static void
+lews_raw_consumer_event(
+    pTHX_
+    void *opaque,
+    uint32_t event,
+    int error,
+    const char *message
+)
+{
+    PERL_UNUSED_ARG(opaque);
+    PERL_UNUSED_ARG(event);
+    PERL_UNUSED_ARG(error);
+    PERL_UNUSED_ARG(message);
+    PERL_UNUSED_CONTEXT;
+}
+
+static void
+lews_raw_consumer_destroy(pTHX_ void *opaque)
+{
+    lews_raw_consumer *context = (lews_raw_consumer *)opaque;
+
+    PERL_UNUSED_CONTEXT;
+    if (context == NULL)
+        return;
+
+    lews_bq_free(context->bq);
+    context->bq = NULL;
+    if (context->stream != NULL)
+        SvREFCNT_dec(context->stream);
+    Safefree(context);
+}
+
+static const les_consumer_ops_v1_t lews_raw_consumer_ops = {
+    LES_CONSUMER_ABI_VERSION,
+    sizeof(les_consumer_ops_v1_t),
+    "Linux::Event::WebSocket bq raw input",
+    LES_CONSUMER_F_RAW_INPUT,
+    lews_raw_consumer_create,
+    NULL,
+    lews_raw_consumer_event,
+    lews_raw_consumer_destroy,
+    NULL,
+    lews_raw_consumer_input
+};
+
 MODULE = Linux::Event::WebSocket    PACKAGE = Linux::Event::WebSocket::_BQ
 
 PROTOTYPES: DISABLE
+
+UV
+_raw_consumer_operations_address()
+CODE:
+    RETVAL = PTR2UV(&lews_raw_consumer_ops);
+OUTPUT:
+    RETVAL
 
 SV *
 new(class, endpoint_type, max_message_size)
@@ -167,36 +599,10 @@ new(class, endpoint_type, max_message_size)
     UV max_message_size
 PREINIT:
     lews_bq *state;
-    bqws_opts opts;
 CODE:
-    Newxz(state, 1, lews_bq);
-    Zero(&opts, 1, bqws_opts);
-
-    opts.skip_handshake = true;
-    opts.recv_control_messages = true;
-    opts.ping_interval = SIZE_MAX;
-    opts.connect_timeout = SIZE_MAX;
-    opts.close_timeout = SIZE_MAX;
-    opts.ping_response_timeout = SIZE_MAX;
-    opts.limits.max_memory_used = SIZE_MAX;
-    opts.limits.max_recv_msg_size = (size_t)(max_message_size < 125 ? 125 : max_message_size);
-    opts.limits.max_recv_queue_messages = SIZE_MAX;
-    opts.limits.max_recv_queue_size = SIZE_MAX;
-    opts.limits.max_partial_message_parts = SIZE_MAX;
-
-    if (strEQ(endpoint_type, "client")) {
-        state->ws = bqws_new_client(&opts, NULL);
-    } else if (strEQ(endpoint_type, "server")) {
-        state->ws = bqws_new_server(&opts, NULL);
-    } else {
-        Safefree(state);
-        croak("endpoint_type must be client or server");
-    }
-
-    if (state->ws == NULL) {
-        Safefree(state);
+    state = lews_bq_create(endpoint_type, max_message_size);
+    if (state == NULL)
         croak("bq_websocket context initialization failed");
-    }
 
     RETVAL = newSV(0);
     sv_setref_pv(RETVAL, class, (void *)state);
@@ -364,11 +770,7 @@ CODE:
     if (SvROK(self)) {
         state = INT2PTR(lews_bq *, SvIV((SV *)SvRV(self)));
         if (state != NULL) {
-            if (state->ws != NULL) {
-                bqws_free_socket(state->ws);
-                state->ws = NULL;
-            }
-            Safefree(state);
+            lews_bq_free(state);
             sv_setiv((SV *)SvRV(self), 0);
         }
     }
