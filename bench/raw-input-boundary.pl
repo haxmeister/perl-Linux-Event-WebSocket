@@ -2,6 +2,7 @@ use v5.36;
 use strict;
 use warnings;
 
+use Errno qw(EAGAIN EWOULDBLOCK EINTR);
 use Socket qw(AF_UNIX SOCK_STREAM PF_UNSPEC);
 use Time::HiRes qw(time);
 use utf8 ();
@@ -147,11 +148,7 @@ sub run_case ($mode, $type, $payload, $duration) {
         warmup           => $warmup,
         start            => undef,
         deadline         => undef,
-        writer           => undef,
         chunk            => $chunk,
-        refill_every     => $frames_per_chunk > 1
-            ? int($frames_per_chunk / 2) : 1,
-        refill_seen      => 0,
     };
 
     my $handler = sub ($connection, $message, $message_type) {
@@ -172,10 +169,6 @@ sub run_case ($mode, $type, $payload, $duration) {
             }
         }
 
-        if (++$state->{refill_seen} >= $state->{refill_every}) {
-            $state->{refill_seen} = 0;
-            $state->{writer}->write($state->{chunk});
-        }
         return;
     };
     $state->{message_handler} = $handler;
@@ -199,12 +192,34 @@ sub run_case ($mode, $type, $payload, $duration) {
         );
     }
 
-    my $writer = Linux::Event::IO::Sock::Stream->new(
-        loop     => $loop,
-        write_fh => $write_fh,
+    $write_fh->blocking(0);
+    my $write_offset = 0;
+    my $writer = $loop->watch_fd(
+        fileno($write_fh),
+        fh => $write_fh,
+        write => sub ($watcher) {
+            while (1) {
+                my $remaining = length($chunk) - $write_offset;
+                my $written = syswrite(
+                    $write_fh,
+                    $chunk,
+                    $remaining,
+                    $write_offset,
+                );
+
+                if (!defined $written) {
+                    next if $! == EINTR;
+                    return if $! == EAGAIN || $! == EWOULDBLOCK;
+                    die "benchmark syswrite failed: $!\n";
+                }
+
+                return if $written == 0;
+                $write_offset += $written;
+                $write_offset = 0
+                    if $write_offset == length($chunk);
+            }
+        },
     );
-    $state->{writer} = $writer;
-    $writer->write($chunk);
 
     $loop->run;
 
@@ -212,8 +227,9 @@ sub run_case ($mode, $type, $payload, $duration) {
     my $rate = $state->{measured} / $elapsed;
     my $mib = $rate * length($payload) / (1024 * 1024);
 
+    $writer->cancel;
     $reader->close if !$reader->is_closed;
-    $writer->close if !$writer->is_closed;
+    close $write_fh;
 
     return ($rate, $mib);
 }
