@@ -38,29 +38,7 @@ use Scalar::Util qw(refaddr);
             },
         );
         $state->{engine_native} = $self->{raw_engine}{native};
-        return;
-    }
-
-    sub _websocket_raw_event ($self, $opcode, $payload) {
-        my $engine = $self->{raw_engine}
-            or die "raw WebSocket engine was not attached\n";
-        local $engine->{in_feed} = 1;
-        $engine->_bq_event($self, $opcode, $payload);
-        return;
-    }
-
-    sub _websocket_raw_invalid_utf8 ($self) {
-        my $engine = $self->{raw_engine}
-            or die "raw WebSocket engine was not attached\n";
-        local $engine->{in_feed} = 1;
-        $engine->_bq_invalid_utf8($self);
-        return;
-    }
-
-    sub _websocket_raw_error ($self, $code, $name) {
-        push @{$self->data->{errors}}, "$code:$name";
-        $self->loop->stop;
-        return;
+        return $self->{raw_engine};
     }
 
     sub _websocket_engine_error ($self, $error) {
@@ -78,12 +56,6 @@ use Scalar::Util qw(refaddr);
         return;
     }
 
-    sub _websocket_raw_complete ($self) {
-        my $engine = $self->{raw_engine}
-            or die "raw WebSocket engine was not attached\n";
-        $engine->_finish_feed($self);
-        return;
-    }
 }
 
 Linux::Event::Framer->declare_native_consumer(
