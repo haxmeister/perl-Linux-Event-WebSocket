@@ -402,32 +402,6 @@ lews_raw_call_error(SV *stream, bqws_error error_code)
     return error;
 }
 
-static SV *
-lews_raw_call_write(SV *stream, SV *wire)
-{
-    SV *error = NULL;
-    dSP;
-
-    ENTER;
-    SAVETMPS;
-    PUSHMARK(SP);
-    EXTEND(SP, 2);
-    XPUSHs(stream);
-    XPUSHs(wire);
-    PUTBACK;
-    sv_setsv(ERRSV, &PL_sv_undef);
-    call_method("write", G_DISCARD | G_EVAL);
-    SPAGAIN;
-    if (SvTRUE(ERRSV)) {
-        error = newSVsv(ERRSV);
-        sv_setsv(ERRSV, &PL_sv_undef);
-    }
-    PUTBACK;
-    FREETMPS;
-    LEAVE;
-    return error;
-}
-
 static int
 lews_raw_call_native_ready(SV *stream, SV *native)
 {
@@ -455,6 +429,32 @@ lews_raw_call_native_ready(SV *stream, SV *native)
     LEAVE;
     return ok;
 }
+static SV *
+lews_raw_call_complete(SV *stream)
+{
+    SV *error = NULL;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(stream);
+    PUTBACK;
+    sv_setsv(ERRSV, &PL_sv_undef);
+    call_method("_websocket_raw_complete", G_DISCARD | G_EVAL);
+    SPAGAIN;
+
+    if (SvTRUE(ERRSV)) {
+        error = newSVsv(ERRSV);
+        sv_setsv(ERRSV, &PL_sv_undef);
+    }
+
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return error;
+}
+
 
 static int
 lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
@@ -531,7 +531,6 @@ lews_raw_consumer_input(
     bqws_msg *msg;
     bqws_error error_code;
     SV *callback_error = NULL;
-    SV *wire = NULL;
     int result = LES_CONSUMER_CONTINUE;
 
     *consumed = 0;
@@ -615,14 +614,8 @@ lews_raw_consumer_input(
         callback_error = lews_raw_call_error(context->stream, error_code);
 
     if (callback_error == NULL
-        && !context->host->is_closed(aTHX_ context->host_context)) {
-        wire = lews_bq_flush(context->bq);
-        if (SvCUR(wire) != 0)
-            callback_error = lews_raw_call_write(context->stream, wire);
-    }
-
-    if (wire != NULL)
-        SvREFCNT_dec(wire);
+        && !context->host->is_closed(aTHX_ context->host_context))
+        callback_error = lews_raw_call_complete(context->stream);
 
     if (used != length && error_code == BQWS_OK
         && bqws_get_state(context->bq->ws) < BQWS_STATE_CLOSING
