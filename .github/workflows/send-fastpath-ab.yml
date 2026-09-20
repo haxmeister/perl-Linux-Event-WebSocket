@@ -57,29 +57,31 @@ jobs:
             make
           )
 
-      - name: Run same-run A/B
+      - name: Run order-balanced A/B
         run: |
           cat > /tmp/run-ab.sh <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
           out="$PWD/send-fastpath-ab.csv"
-          echo 'variant,clients,window,sample,msg_per_sec' > "$out"
+          echo 'variant,clients,window,round,msg_per_sec' > "$out"
 
-          run_variant() {
+          run_one() {
               local variant="$1"
               local tree="$2"
               local port="$3"
-              local server_pid=''
+              local clients="$4"
+              local window="$5"
+              local round="$6"
+
+              PERL5LIB="$tree/blib/lib:$tree/blib/arch" \
+                taskset -c 0 env PORT="$port" BENCH_MODE=application \
+                perl "$tree/bench/compare/servers/linux-event.pl" >/tmp/ws-${variant}.log 2>&1 &
+              local server_pid=$!
 
               cleanup() {
-                  if [[ -n "$server_pid" ]]; then
-                      kill "$server_pid" 2>/dev/null || true
-                      wait "$server_pid" 2>/dev/null || true
-                  fi
+                  kill "$server_pid" 2>/dev/null || true
+                  wait "$server_pid" 2>/dev/null || true
               }
-
-              PERL5LIB="$tree/blib/lib:$tree/blib/arch"                 taskset -c 0 env PORT="$port" BENCH_MODE=application                 perl "$tree/bench/compare/servers/linux-event.pl" >/tmp/ws-${variant}.log 2>&1 &
-              server_pid=$!
 
               for _ in {1..200}; do
                   if timeout 0.1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
@@ -92,20 +94,29 @@ jobs:
                   sleep 0.05
               done
 
-              for clients in 20 100 500 1000; do
-                  for window in 1 4; do
-                      for sample in 1 2 3 4 5; do
-                          row="$(taskset -c 1 node bench/compare/load.mjs                               --label "$variant" --port "$port"                               --mode application --type text --bytes 64                               --clients "$clients" --window "$window"                               --warmup 0.75 --seconds 2)"
-                          rate="$(echo "$row" | awk -F, '{print $8}')"
-                          echo "$variant,$clients,$window,$sample,$rate" | tee -a "$out"
-                      done
-                  done
-              done
+              row="$(taskset -c 1 node bench/compare/load.mjs \
+                  --label "$variant" --port "$port" \
+                  --mode application --type text --bytes 64 \
+                  --clients "$clients" --window "$window" \
+                  --warmup 0.75 --seconds 2)"
+              rate="$(echo "$row" | awk -F, '{print $8}')"
+              echo "$variant,$clients,$window,$round,$rate" | tee -a "$out"
               cleanup
           }
 
-          run_variant baseline /tmp/ws-baseline 9601
-          run_variant candidate /tmp/ws-candidate 9602
+          for clients in 100 1000; do
+              for window in 1 4; do
+                  for round in 1 2 3 4 5; do
+                      if (( round % 2 )); then
+                          run_one baseline /tmp/ws-baseline 9601 "$clients" "$window" "$round"
+                          run_one candidate /tmp/ws-candidate 9602 "$clients" "$window" "$round"
+                      else
+                          run_one candidate /tmp/ws-candidate 9602 "$clients" "$window" "$round"
+                          run_one baseline /tmp/ws-baseline 9601 "$clients" "$window" "$round"
+                      fi
+                  done
+              done
+          done
           EOF
           chmod +x /tmp/run-ab.sh
           /tmp/run-ab.sh
