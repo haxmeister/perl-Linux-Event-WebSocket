@@ -16,6 +16,7 @@ const option = parseArgs(process.argv);
 const label = option.label ?? 'server';
 const host = option.host ?? '127.0.0.1';
 const port = Number(option.port ?? 9002);
+const mode = option.mode ?? 'echo';
 const type = option.type ?? 'binary';
 const bytes = Number(option.bytes ?? 64);
 const clients = Number(option.clients ?? 1);
@@ -24,6 +25,7 @@ const warmupSeconds = Number(option.warmup ?? 0.5);
 const measureSeconds = Number(option.seconds ?? 1.5);
 
 if (!Number.isInteger(port) || port < 1) throw new Error('invalid --port');
+if (!['echo', 'application'].includes(mode)) throw new Error('invalid --mode');
 if (!['binary', 'text'].includes(type)) throw new Error('invalid --type');
 if (!Number.isInteger(bytes) || bytes < 1) throw new Error('invalid --bytes');
 if (!Number.isInteger(clients) || clients < 1) throw new Error('invalid --clients');
@@ -33,7 +35,19 @@ if (!(measureSeconds > 0)) throw new Error('invalid --seconds');
 
 const binaryPayload = Buffer.alloc(bytes, 0x78);
 const textPayload = 'x'.repeat(bytes);
-const payload = type === 'binary' ? binaryPayload : textPayload;
+const applicationPrefix = '{"op":"message","room":"bench","body":"';
+const applicationSuffix = '","seq":12345}';
+if (mode === 'application' &&
+    bytes < applicationPrefix.length + applicationSuffix.length) {
+  throw new Error('application payload is too small');
+}
+const applicationPayload = applicationPrefix
+  + 'x'.repeat(Math.max(0, bytes - applicationPrefix.length - applicationSuffix.length))
+  + applicationSuffix;
+const applicationAck = '{"ok":true}';
+const payload = mode === 'application'
+  ? applicationPayload
+  : (type === 'binary' ? binaryPayload : textPayload);
 const sockets = [];
 
 let opened = 0;
@@ -58,7 +72,7 @@ function fail(message) {
 function sendOne(ws) {
   if (stopped) return;
   ws.send(payload, {
-    binary: type === 'binary',
+    binary: mode === 'application' ? false : type === 'binary',
     compress: false,
   });
 }
@@ -79,7 +93,7 @@ function finish() {
 
   console.log([
     label,
-    type,
+    mode === 'application' ? 'application' : type,
     bytes,
     clients,
     windowSize,
@@ -104,7 +118,10 @@ function allOpened() {
 }
 
 for (let i = 0; i < clients; ++i) {
-  const ws = new WebSocket(`ws://${host}:${port}/benchmark?type=${type}`, {
+  const path = mode === 'application'
+    ? '/application'
+    : `/benchmark?type=${type}`;
+  const ws = new WebSocket(`ws://${host}:${port}${path}`, {
     perMessageDeflate: false,
     maxPayload: 32 * 1024 * 1024,
   });
@@ -121,15 +138,22 @@ for (let i = 0; i < clients; ++i) {
   ws.on('message', (data, isBinary) => {
     if (stopped) return;
 
-    const expectedBinary = type === 'binary';
-    if (isBinary !== expectedBinary) {
-      fail(`message type mismatch: expected ${type}`);
-      return;
-    }
+    if (mode === 'application') {
+      if (isBinary || data.toString() !== applicationAck) {
+        fail('application acknowledgement mismatch');
+        return;
+      }
+    } else {
+      const expectedBinary = type === 'binary';
+      if (isBinary !== expectedBinary) {
+        fail(`message type mismatch: expected ${type}`);
+        return;
+      }
 
-    if (data.length !== bytes) {
-      fail(`message size mismatch: expected ${bytes}, got ${data.length}`);
-      return;
+      if (data.length !== bytes) {
+        fail(`message size mismatch: expected ${bytes}, got ${data.length}`);
+        return;
+      }
     }
 
     if (measuring) ++count;

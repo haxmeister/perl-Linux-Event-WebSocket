@@ -10,7 +10,7 @@ on:
       - 'lib/Linux/Event/WebSocket/**'
       - '.github/workflows/comparison.yml'
   push:
-    branches: [ main ]
+    branches: [ main, bench/application-cross-implementation ]
     paths:
       - '.github/workflows/comparison.yml'
       - 'bench/compare/**'
@@ -106,6 +106,9 @@ jobs:
       - name: Run comparison
         run: bash bench/compare/run-comparison.sh comparison.csv
 
+      - name: Run application comparison
+        run: bash bench/compare/run-application-comparison.sh application-comparison.csv
+
       - name: Run client comparison
         run: bash bench/compare/run-client-comparison.sh client-comparison.csv
 
@@ -113,6 +116,9 @@ jobs:
         run: |
           echo "Server comparison"
           cat comparison.csv
+          echo
+          echo "Application comparison"
+          cat application-comparison.csv
           echo
           echo "Client comparison"
           cat client-comparison.csv
@@ -123,5 +129,6 @@ jobs:
           name: websocket-implementation-comparison
           path: |
             comparison.csv
+            application-comparison.csv
             client-comparison.csv
             comparison-environment.txt
