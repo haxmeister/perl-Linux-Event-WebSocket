@@ -44,34 +44,7 @@ use Linux::Event::WebSocket::_Frame;
             native           => $native,
             message_handler  => $state->{message_handler},
         );
-        return;
-    }
-
-    sub _websocket_raw_event ($self, $opcode, $payload) {
-        my $engine = $self->{bench_engine}
-            or die "raw benchmark engine is unavailable\n";
-        local $engine->{in_feed} = 1;
-        $engine->_bq_event($self, $opcode, $payload);
-        return;
-    }
-
-    sub _websocket_raw_invalid_utf8 ($self) {
-        my $engine = $self->{bench_engine}
-            or die "raw benchmark engine is unavailable\n";
-        local $engine->{in_feed} = 1;
-        $engine->_bq_invalid_utf8($self);
-        return;
-    }
-
-    sub _websocket_raw_error ($self, $code, $name) {
-        die "raw WebSocket input failed: $code/$name\n";
-    }
-
-    sub _websocket_raw_complete ($self) {
-        my $engine = $self->{bench_engine}
-            or die "raw benchmark engine is unavailable\n";
-        $engine->_finish_feed($self);
-        return;
+        return $self->{bench_engine};
     }
 }
 
