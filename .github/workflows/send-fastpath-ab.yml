@@ -1,0 +1,120 @@
+name: WebSocket send fastpath A/B
+
+on:
+  push:
+    branches: [ experiment/xs-send-fastpath ]
+    paths:
+      - '.github/workflows/send-fastpath-ab.yml'
+      - 'lib/Linux/Event/WebSocket/Connection.pm'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install dependencies
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+          npm install --prefix bench/compare
+
+      - name: Prepare baseline and candidate
+        run: |
+          git worktree add /tmp/ws-baseline origin/main
+          cp -a . /tmp/ws-candidate
+          (
+            cd /tmp/ws-baseline
+            perl Makefile.PL
+            make
+          )
+          (
+            cd /tmp/ws-candidate
+            perl Makefile.PL
+            make
+          )
+
+      - name: Run same-run A/B
+        run: |
+          cat > /tmp/run-ab.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          out="$PWD/send-fastpath-ab.csv"
+          echo 'variant,clients,window,sample,msg_per_sec' > "$out"
+
+          run_variant() {
+              local variant="$1"
+              local tree="$2"
+              local port="$3"
+              local server_pid=''
+
+              cleanup() {
+                  if [[ -n "$server_pid" ]]; then
+                      kill "$server_pid" 2>/dev/null || true
+                      wait "$server_pid" 2>/dev/null || true
+                  fi
+              }
+
+              PERL5LIB="$tree/blib/lib:$tree/blib/arch"                 taskset -c 0 env PORT="$port" BENCH_MODE=application                 perl "$tree/bench/compare/servers/linux-event.pl" >/tmp/ws-${variant}.log 2>&1 &
+              server_pid=$!
+
+              for _ in {1..200}; do
+                  if timeout 0.1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+                      break
+                  fi
+                  if ! kill -0 "$server_pid" 2>/dev/null; then
+                      cat /tmp/ws-${variant}.log >&2
+                      exit 1
+                  fi
+                  sleep 0.05
+              done
+
+              for clients in 20 100 500 1000; do
+                  for window in 1 4; do
+                      for sample in 1 2 3 4 5; do
+                          row="$(taskset -c 1 node bench/compare/load.mjs                               --label "$variant" --port "$port"                               --mode application --type text --bytes 64                               --clients "$clients" --window "$window"                               --warmup 0.75 --seconds 2)"
+                          rate="$(echo "$row" | awk -F, '{print $8}')"
+                          echo "$variant,$clients,$window,$sample,$rate" | tee -a "$out"
+                      done
+                  done
+              done
+              cleanup
+          }
+
+          run_variant baseline /tmp/ws-baseline 9601
+          run_variant candidate /tmp/ws-candidate 9602
+          EOF
+          chmod +x /tmp/run-ab.sh
+          /tmp/run-ab.sh
+
+      - name: Show results
+        run: cat send-fastpath-ab.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-send-fastpath-ab
+          path: send-fastpath-ab.csv
