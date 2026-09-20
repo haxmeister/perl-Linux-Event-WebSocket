@@ -19,7 +19,7 @@ use Scalar::Util qw(refaddr);
     use parent 'Linux::Event::IO::Sock::Stream';
 
     sub _websocket_raw_config ($self) {
-        return ('server', 1024 * 1024);
+        return [ 'server', 1024 * 1024 ];
     }
 
     sub _websocket_raw_native_ready ($self, $native) {
