@@ -422,6 +422,39 @@ lews_raw_call_native_ready(SV *stream, SV *native)
     return ok;
 }
 
+static int
+lews_raw_consumer_initialize(pTHX_ lews_raw_consumer *context)
+{
+    char endpoint_type[7];
+    UV max_message_size;
+
+    if (context->bq != NULL)
+        return 1;
+
+    if (!lews_raw_stream_config(
+            aTHX_ context->stream, endpoint_type, &max_message_size))
+        return 0;
+
+    context->native = lews_bq_new_object(
+        "Linux::Event::WebSocket::_BQ",
+        endpoint_type,
+        max_message_size
+    );
+    if (context->native == NULL)
+        return 0;
+
+    context->bq = lews_bq_from_sv(context->native);
+
+    if (!lews_raw_call_native_ready(context->stream, context->native)) {
+        context->bq = NULL;
+        SvREFCNT_dec(context->native);
+        context->native = NULL;
+        return 0;
+    }
+
+    return 1;
+}
+
 static void *
 lews_raw_consumer_create(
     pTHX_
@@ -431,8 +464,8 @@ lews_raw_consumer_create(
 )
 {
     lews_raw_consumer *context;
-    char endpoint_type[7];
-    UV max_message_size;
+
+    PERL_UNUSED_CONTEXT;
 
     if (host == NULL
         || host->abi_version != LES_CONSUMER_ABI_VERSION
@@ -440,36 +473,13 @@ lews_raw_consumer_create(
         || host->retain == NULL || host->release == NULL)
         return NULL;
 
-    if (!lews_raw_stream_config(
-            aTHX_ stream, endpoint_type, &max_message_size))
-        return NULL;
-
     Newxz(context, 1, lews_raw_consumer);
     if (context == NULL)
         return NULL;
 
-    context->native = lews_bq_new_object(
-        "Linux::Event::WebSocket::_BQ",
-        endpoint_type,
-        max_message_size
-    );
-    if (context->native == NULL) {
-        Safefree(context);
-        return NULL;
-    }
-    context->bq = lews_bq_from_sv(context->native);
-
     context->host = host;
     context->host_context = host_context;
     context->stream = SvREFCNT_inc(stream);
-
-    if (!lews_raw_call_native_ready(stream, context->native)) {
-        SvREFCNT_dec(context->stream);
-        SvREFCNT_dec(context->native);
-        Safefree(context);
-        return NULL;
-    }
-
     return context;
 }
 
@@ -492,13 +502,23 @@ lews_raw_consumer_input(
 
     *consumed = 0;
 
-    if (context == NULL || context->bq == NULL
+    if (context == NULL
         || context->host == NULL || context->host->retain == NULL
         || context->host->release == NULL)
         return LES_CONSUMER_ERROR;
 
     if (!context->host->retain(aTHX_ context->host_context))
         return LES_CONSUMER_ERROR;
+
+    if (!lews_raw_consumer_initialize(aTHX_ context)) {
+        context->host->release(aTHX_ context->host_context);
+        return LES_CONSUMER_ERROR;
+    }
+
+    if (context->host->is_closed(aTHX_ context->host_context)) {
+        context->host->release(aTHX_ context->host_context);
+        return LES_CONSUMER_CONTINUE;
+    }
 
     while (used < length) {
         size_t n = bqws_read_from(
