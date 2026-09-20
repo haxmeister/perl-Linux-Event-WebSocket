@@ -87,8 +87,8 @@ die "BENCH_SECONDS must be positive\n"
     || $seconds <= 0;
 
 sub text_payload ($size) {
-    my $prefix = '{"op":"message","channel":"events","content":"';
-    my $suffix = '","sequence":12345}';
+    my $prefix = '{"m":"';
+    my $suffix = '"}';
     my $emoji = "\N{U+1F680}";
     utf8::encode($emoji);
 
