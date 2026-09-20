@@ -19,6 +19,14 @@ sub raw_consumer_definition ($class) {
     };
 }
 
+sub http_bridge_consumer_definition ($class) {
+    return {
+        provider           => \&_http_bridge_consumer_operations_address,
+        abi_version        => 1,
+        operations_address => _http_bridge_consumer_operations_address(),
+    };
+}
+
 sub CLONE_SKIP { 1 }
 
 1;
