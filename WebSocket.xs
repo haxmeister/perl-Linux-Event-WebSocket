@@ -71,6 +71,24 @@ lews_bq_free(lews_bq *state)
     Safefree(state);
 }
 
+static SV *
+lews_bq_new_object(
+    const char *class,
+    const char *endpoint_type,
+    UV max_message_size
+)
+{
+    lews_bq *state = lews_bq_create(endpoint_type, max_message_size);
+    SV *object;
+
+    if (state == NULL)
+        return NULL;
+
+    object = newSV(0);
+    sv_setref_pv(object, class, (void *)state);
+    return object;
+}
+
 static lews_bq *
 lews_bq_from_sv(SV *self)
 {
@@ -213,6 +231,7 @@ typedef struct {
     const les_consumer_host_api_v1_t *host;
     void *host_context;
     SV *stream;
+    SV *native;
     lews_bq *bq;
 } lews_raw_consumer;
 
@@ -281,6 +300,32 @@ lews_raw_stream_config(
     LEAVE;
 
     return *max_message_size > 0;
+}
+
+
+static int
+lews_raw_call_native_ready(SV *stream, SV *native)
+{
+    int ok = 1;
+    dSP;
+
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    EXTEND(SP, 2);
+    XPUSHs(stream);
+    XPUSHs(native);
+    PUTBACK;
+    call_method("_websocket_raw_native_ready", G_DISCARD | G_EVAL);
+    SPAGAIN;
+    if (SvTRUE(ERRSV)) {
+        sv_setsv(ERRSV, &PL_sv_undef);
+        ok = 0;
+    }
+    PUTBACK;
+    FREETMPS;
+    LEAVE;
+    return ok;
 }
 
 static SV *
@@ -419,15 +464,28 @@ lews_raw_consumer_create(
     if (context == NULL)
         return NULL;
 
-    context->bq = lews_bq_create(endpoint_type, max_message_size);
-    if (context->bq == NULL) {
+    context->native = lews_bq_new_object(
+        "Linux::Event::WebSocket::_BQ",
+        endpoint_type,
+        max_message_size
+    );
+    if (context->native == NULL) {
         Safefree(context);
         return NULL;
     }
+    context->bq = lews_bq_from_sv(context->native);
 
     context->host = host;
     context->host_context = host_context;
     context->stream = SvREFCNT_inc(stream);
+
+    if (!lews_raw_call_native_ready(stream, context->native)) {
+        SvREFCNT_dec(context->stream);
+        SvREFCNT_dec(context->native);
+        Safefree(context);
+        return NULL;
+    }
+
     return context;
 }
 
@@ -564,8 +622,9 @@ lews_raw_consumer_destroy(pTHX_ void *opaque)
     if (context == NULL)
         return;
 
-    lews_bq_free(context->bq);
     context->bq = NULL;
+    if (context->native != NULL)
+        SvREFCNT_dec(context->native);
     if (context->stream != NULL)
         SvREFCNT_dec(context->stream);
     Safefree(context);
@@ -600,15 +659,10 @@ new(class, endpoint_type, max_message_size)
     const char *class
     const char *endpoint_type
     UV max_message_size
-PREINIT:
-    lews_bq *state;
 CODE:
-    state = lews_bq_create(endpoint_type, max_message_size);
-    if (state == NULL)
+    RETVAL = lews_bq_new_object(class, endpoint_type, max_message_size);
+    if (RETVAL == NULL)
         croak("bq_websocket context initialization failed");
-
-    RETVAL = newSV(0);
-    sv_setref_pv(RETVAL, class, (void *)state);
 OUTPUT:
     RETVAL
 
