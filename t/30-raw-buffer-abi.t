@@ -61,6 +61,13 @@ use Scalar::Util qw(refaddr);
         $self->loop->stop;
         return;
     }
+
+    sub _websocket_raw_complete ($self) {
+        my $engine = $self->{raw_engine}
+            or die "raw WebSocket engine was not attached\n";
+        $engine->_finish_feed($self);
+        return;
+    }
 }
 
 Linux::Event::Framer->declare_native_consumer(
