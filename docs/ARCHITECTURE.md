@@ -5,24 +5,25 @@ yet had its first CPAN release, so public API details may still change.
 
 ## Layer ownership
 
-`Linux::Event` owns sockets, TLS, ordered byte delivery, write buffering,
-backpressure, lifecycle, timers, and in-place `transition_to()` operations.
+`Linux::Event` owns sockets, epoll, TLS, ordered byte delivery, write
+buffering, backpressure, lifecycle, timers, and in-place `transition_to()`
+operations.
 
 `Linux::Event::HTTP` owns the opening HTTP/1.1 request/response exchange and
 preserves bytes read after the Upgrade headers during the protocol transition.
 
-`Linux::Event::WebSocket` owns the public connection API and its private RFC 6455
-implementation: handshake validation, framing, masking, fragmentation, message
-assembly, UTF-8 policy, control frames, and graceful close behavior.
+`Linux::Event::WebSocket` owns the public connection API, Upgrade policy,
+RFC 6455 data semantics, text policy, control behavior, and graceful close
+lifecycle.
 
-HTTP and WebSocket remain distinct protocol layers. This distribution does not
-contain a second HTTP parser, and Linux::Event core does not contain
-WebSocket-specific framing.
+The production frame/message engine is a vendored, locally patched
+`bq_websocket` core reached through XS. It does not own transport or the event
+loop.
 
 ## Connection model
 
 An established WebSocket connection is the same live Linux::Event Stream that
-performed the HTTP Upgrade. It is transitioned in place, rather than wrapped or
+performed the HTTP Upgrade. It is transitioned in place rather than wrapped or
 replaced. Socket identity, TLS state, queued output, application data, and
 already-read bytes remain attached.
 
@@ -39,78 +40,156 @@ Linux::Event::WebSocket::Server::Connection
 ```
 
 There are no roles, mixins, multiple-inheritance trees, or injected methods in
-the connection design. Client versus server is called the `endpoint_type`.
-
-The common public connection operations are:
-
-```text
-send_text  send_binary  ping  close  abort
-is_open    is_closing   subprotocol  secure  url
-handshake_request  handshake_response  data
-```
-
-`close()` starts the RFC 6455 close handshake. `abort()` closes the transport
-immediately.
+the connection design.
 
 ## HTTP Upgrade handoff
 
 The high-level server composes `Linux::Event::HTTP::Server`. Accepted streams
-start as a private HTTP connection and transition to the configured WebSocket
-server connection class after a valid handshake.
+start as HTTP connections and transition to the configured WebSocket connection
+class after a valid handshake.
 
 The high-level client uses `Linux::Event::HTTP::Client::Connection` for the
 opening exchange. WebSocket state is attached before the request is sent,
 because post-101 bytes may be delivered to the transitioned class before the
 public HTTP `on_upgrade` callback runs.
 
-This ordering is essential for the same-read case: a peer may put its first
-WebSocket frame in the same transport read as the final HTTP headers. Production
-test `t/12-upgrade-tail.t` covers that boundary in both directions.
+The two private WebSocket HTTP-connection classes declare a small native
+handoff consumer. During the handshake it materializes the borrowed native
+window into the same byte string expected by the existing HTTP `on_data`
+implementation. It does not parse HTTP itself.
 
-## Private RFC 6455 engine
+After the 101 handoff, Linux::Event `transition_to()` replaces that temporary
+consumer with the WebSocket bq raw-input consumer while preserving unread
+native bytes. The live object is reblessed before the replacement consumer can
+re-drive those preserved bytes. This lets the first WebSocket frame share the
+same transport read as the HTTP Upgrade without passing established WebSocket
+traffic through Perl `on_data`.
 
-The private implementation is split by responsibility:
+The native WebSocket engine is created with bq's handshake disabled. HTTP
+parsing and Upgrade validation therefore remain outside bq. Production test
+`t/12-upgrade-tail.t` covers the same-read boundary in both directions and
+requires `open` to precede delivery of a same-read first message.
+
+## Production data path
+
+Established inbound data follows:
 
 ```text
-_Random     exact-length bytes from /dev/urandom
-_Handshake  client request, server response, and Upgrade validation
-_Frame      frame encoding, masking, opcodes, and close payloads
-_Parser     incremental frame parsing and wire-policy validation
-_Engine     message assembly, UTF-8, control frames, and close state
-_State      connection/application state preserved across transition
-_UTF8       RFC 3629 byte validation and Perl string conversion
+Linux::Event native ordered-byte buffer
+    -> WebSocket raw consumer in WebSocket.xs
+    -> vendored bq_websocket parser/message assembly
+    -> XS RFC 3629 validation for completed text
+    -> _Engine direct event delivery
+    -> application callback
 ```
 
-The handshake implementation validates method, HTTP version, Upgrade and
-Connection tokens, version 13, keys, accepts, extensions, and subprotocol
-selection. Client keys are 16 random bytes encoded as base64.
+No Perl read scalar is created before WebSocket parsing. A payload SV is created
+only for a completed application message that must cross into Perl.
 
-The parser accepts arbitrarily split or coalesced input. It rejects non-minimal
-lengths, invalid 64-bit lengths, reserved bits and opcodes, incorrect masking,
-oversized frames, and malformed control frames before accepting their payloads.
+Outbound text follows:
 
-The engine reassembles fragmented text and binary messages while allowing
-interleaved control frames. Text and close reasons are validated against RFC
-3629 by the private `_UTF8` helper rather than Perl Encode's stricter Unicode
-noncharacter policy. Binary messages remain byte strings. Incoming pings
-receive an identical pong.
+```text
+application send_text
+    -> Connection
+    -> _Engine
+    -> _BQ XS adapter
+    -> Perl C UTF-8 validation/byte representation
+    -> bq_websocket framing/masking
+    -> Stream::write
+```
 
-Client frames use a fresh four-byte mask from `/dev/urandom`. Server frames are
-not masked. No extensions are currently negotiated.
+Binary data bypasses UTF-8 validation. Client masking keys come from Linux
+`getrandom(2)`.
 
-## Size limits
+### Raw native-input path
 
-The high-level client and server default `max_message_size` to 16 MiB. It bounds
-an advertised data frame before its payload is accumulated and the combined
-payload of a fragmented logical message. Valid control frames retain their RFC
-6455 limit of 125 bytes even when the application message limit is smaller.
+Linux::Event 0.115's raw native-consumer ABI exposes a borrowed ordered-byte
+input window before core creates a Perl read scalar. Linux::Event::WebSocket
+uses that facility as its established receive path without moving any
+WebSocket framing policy into Linux::Event core.
+
+The provider and `_Engine` share one `_BQ` object, so inbound parsing,
+outbound sends, Ping/Pong, Close, and error state remain one protocol state
+machine. Provider creation does not re-enter Perl. On first WebSocket input the
+provider obtains connection configuration, creates bq, obtains the actual
+`_Engine` object once, and retains that Engine for direct event delivery.
+
+The provider preserves the Engine's `in_feed` guard while bq drains input so
+application sends from message callbacks keep the same non-reentrant output
+semantics as the previous path. Linux::Event host retain/release brackets the
+callback-capable input work.
+
+Linux::Event core remains protocol-neutral. Its responsibilities here are the
+generic raw-input ABI, safe provider replacement during `transition_to()`,
+preservation of unread native input, and correct reentrant terminal teardown.
+The HTTP bridge, bq parser, RFC policy, and WebSocket lifecycle all remain in
+this distribution.
+
+
+The adapter compiles bq single-threaded because a connection is owned by one
+Linux::Event loop. bq's automatic Ping and timeout policy is disabled;
+Linux::Event::WebSocket keeps its existing close timer and explicit `ping()`
+semantics.
+
+## Private implementation pieces
+
+```text
+_BQ         XS loader for the native protocol adapter
+_Engine     WebSocket policy, lifecycle, dispatch, and error mapping
+_Handshake  WebSocket HTTP Upgrade validation/policy
+_State      connection/application state preserved across transition
+_Frame      close-code helpers plus test/developer frame utilities
+_UTF8       close-reason string conversion helpers
+_Parser     retained reference/test parser, not the production data path
+```
+
+`WebSocket.xs` embeds the vendored bq source directly. No system bq library is
+required.
+
+## Vendored bq policy
+
+The vendored source is based on upstream commit
+`6c188d3f0edca38d7a8926e0d30f4c145414ba4c` and is distributed under MIT.
+It is intentionally patched. The maintained differences include secure Linux
+mask generation, RFC close-code and close-reason validation, rejection of
+oversized control frames before side effects, safe Close echo ownership, and
+one Pong response for every Ping.
+
+The complete patch policy and license location are documented in
+`vendor/bq_websocket/README.md`.
+
+Upstream refreshes are deliberate maintenance work, not blind source copies.
+They must preserve the local policy and pass normal tests plus Autobahn client
+and server conformance.
+
+## UTF-8 policy
+
+WebSocket text must satisfy RFC 3629. The production receive and send paths use
+Perl's C UTF-8 API from XS with
+`UTF8_DISALLOW_ILLEGAL_C9_INTERCHANGE`. This rejects malformed/overlong
+sequences, surrogate code points, Perl-extended UTF-8, and values above
+U+10FFFF while continuing to permit Unicode noncharacters.
+
+Inbound valid non-ASCII text is delivered as a Perl UTF-8 scalar. ASCII text
+stays on the invariant fast path.
+
+Close reasons remain small control payloads and use the private `_UTF8`
+helper at the Perl policy layer.
+
+## Size limits and fragmentation
+
+The high-level client and server default `max_message_size` to 16 MiB. bq is
+configured so the application message-size limit, not bq's upstream queue or
+fragment-count defaults, controls accepted logical message size.
+
+Valid control frames retain the RFC 6455 125-byte maximum even if the
+application data-message limit is smaller.
 
 ## Close behavior
 
-Receiving a close frame validates its payload, echoes it when necessary,
-dispatches `on_close`, and ends transport output. A locally initiated close
-waits for the peer response, with a configurable timeout that falls back to a
-hard abort.
+Receiving a valid Close dispatches `on_close` and ends transport output. A
+locally initiated Close waits for the peer response, with the existing
+configurable timeout falling back to a hard abort.
 
 Protocol violations produce the applicable close status when possible:
 
@@ -118,63 +197,54 @@ Protocol violations produce the applicable close status when possible:
 - 1007 for invalid UTF-8 payloads;
 - 1009 for configured size-limit violations.
 
-## Stream close ownership
+`Linux::Event::WebSocket::Connection::close()` intentionally means the RFC
+6455 close handshake. `abort()` is immediate transport termination.
+Linux::Event 0.115 supplies the matching core invariant that involuntary Stream
+teardown bypasses a protocol subclass's public `close()`.
 
-`Linux::Event::WebSocket::Connection` intentionally overrides the inherited
-Stream `close()` name to mean the RFC 6455 graceful close handshake. Immediate
-transport termination remains `abort()`.
+## Test and conformance policy
 
-Linux::Event 0.115 establishes the complementary core invariant: involuntary
-Stream teardown uses private terminal-close machinery instead of dynamically
-dispatching through a protocol subclass's public `close()`. This lets a
-protocol subclass give `close()` protocol-level semantics without risking a
-transport failure accidentally starting a graceful protocol shutdown.
+Normal CI targets Perl 5.36 and Perl 5.44.
 
-This distribution therefore requires Linux::Event 0.115 or newer. Regression
-test `t/13-core-close-boundary.t` verifies that forced Stream cleanup of a
-WebSocket subclass bypasses its public `close()`, does not initialize the
-WebSocket engine, and still closes the underlying descriptor.
+Repository-only Autobahn testing covers both server and client. Sections 12 and
+13 remain excluded because permessage-deflate is not implemented. Native-engine
+changes are not acceptable unless both directions remain free of conformance
+failures. The report checker also requires all 301 selected cases so a
+truncated run cannot pass.
 
-## Test coverage
+The current bq integration reports 287 OK, 11 NON-STRICT, and 3 INFORMATIONAL
+cases in each direction, with 298 OK and 3 INFORMATIONAL close results. The
+NON-STRICT cases are accepted Autobahn behaviors, not conformance failures:
 
-The suite covers handshake vectors and failures, incremental frame parsing at
-every byte boundary, masking direction, length encodings, fragmentation,
-message-size limits, UTF-8 failures, ping/pong, close validation, same-read HTTP
-handoff, object identity, subprotocols, text and binary messages, graceful
-close, abrupt transport loss, simultaneous close, peer loss during local close,
-and local TLS client/server operation.
+- seven cases close correctly with 1002 after a later malformed frame in a
+  coalesced read, but bq does not first expose an already-complete preceding
+  message to the application;
+- four fragmented-invalid-UTF-8 cases close correctly with 1007 when the
+  logical message is completed rather than at the earliest byte at which the
+  invalid sequence can be proven.
 
-CI targets Perl 5.36 and Perl 5.44.
+Changing the first behavior would require interleaving application delivery and
+output flushing inside bq's parse of one transport read, which would alter the
+measured batching path. It is intentionally not done solely to convert an
+Autobahn NON-STRICT classification to OK.
 
-Repository-only Autobahn conformance provides independent black-box RFC 6455
-checks for both server and client. Each side runs 301 selected cases with
-sections 12 and 13 excluded because they cover optional WebSocket
-compression/permessage-deflate. Both server and client currently report 294
-strict OK, 4 NON-STRICT, and 3 INFORMATIONAL outcomes; close behavior reports
-298 OK and 3 INFORMATIONAL outcomes. There are no conformance failures. No
-Autobahn/Python code is linked into or shipped with the distribution.
+The production suite also keeps the older frame/parser tests as an independent
+reference for wire vectors and protocol-policy regressions.
 
-## Performance and native-code policy
+## Native-code decision
 
-Repository benchmarks cover protocol primitives and steady-state public
-client/server echo workloads. The first benchmark pass identified two material
-costs: reopening `/dev/urandom` for every client mask and byte-by-byte Perl
-UTF-8 validation.
+The first implementation intentionally stayed in Perl until measurement
+identified a material end-to-end bottleneck. The bq experiments then showed
+large improvements on small/medium messages, large messages, realistic Unicode,
+100-client traffic, and broadcast fan-out while preserving conformance.
 
-Both were improved without native code. `_Random` now retains a lazy
-close-on-exec random descriptor. `_UTF8` uses an ASCII fast path and C-backed
-`utf8::decode`, followed by explicit RFC 3629 scalar-range checks.
+That evidence justifies native WebSocket code in this distribution. It does not
+justify putting WebSocket-specific framing in Linux::Event core.
 
-The resulting text-path improvement is large enough that current measurements
-do not justify WebSocket-specific XS. See `docs/BENCHMARKS.md` for methodology
-and representative results.
-
-If later measurement shows a remaining material bottleneck, WebSocket-specific
-native code belongs in this distribution. Linux::Event core should change only
-for a reusable facility useful to multiple protocol distributions.
+See `docs/BENCHMARKS.md` for representative measurements.
 
 ## Deferred work
 
-- `permessage-deflate` negotiation and compression;
-- WebSocket-specific XS;
+- permessage-deflate negotiation and compression;
+- optional future upstream bq refreshes;
 - async/await-first APIs.

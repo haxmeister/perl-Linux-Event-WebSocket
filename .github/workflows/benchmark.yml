@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/benchmark.yml'
       - 'bench/**'
+      - 'WebSocket.xs'
+      - 'vendor/bq_websocket/**'
       - 'lib/Linux/Event/WebSocket/**'
 
 concurrency:
@@ -46,6 +48,9 @@ jobs:
           perl Makefile.PL
           make
 
+      - name: Expose built XS
+        run: echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
+
       - name: Record environment
         run: |
           {
@@ -59,10 +64,31 @@ jobs:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/protocol.pl | tee benchmark-protocol.txt
 
-      - name: Pure-Perl optimization candidates
+      - name: Historical Perl optimization candidates
         env:
           BENCH_SECONDS: '0.6'
         run: perl -Iblib/lib bench/candidates.pl | tee benchmark-candidates.txt
+
+      - name: Raw input boundary benchmark
+        env:
+          BENCH_SECONDS: '0.75'
+        shell: bash
+        run: |
+          set -o pipefail
+          perl -Iblib/lib bench/raw-input-boundary.pl | tee benchmark-raw-input.txt
+
+      - name: Public application benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > benchmark-application.txt
+
+          for bytes in 256 1024 16384; do
+            perl -Iblib/lib bench/application.pl \
+              --label current --bytes "$bytes" \
+              --clients 20 --window 4 --seconds 1.5 \
+              | tee -a benchmark-application.txt
+          done
 
       - name: Public API echo benchmark
         shell: bash
@@ -93,4 +119,6 @@ jobs:
             benchmark-environment.txt
             benchmark-protocol.txt
             benchmark-candidates.txt
+            benchmark-raw-input.txt
+            benchmark-application.txt
             benchmark-echo.txt

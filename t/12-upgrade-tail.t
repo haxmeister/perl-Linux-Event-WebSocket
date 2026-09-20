@@ -80,6 +80,7 @@ my $state = {
     errors         => [],
     server_message => undef,
     client_message => undef,
+    server_sequence => [],
     parser         => Linux::Event::WebSocket::_Parser->new(
         endpoint_type  => 'client',
         max_frame_size => 1024,
@@ -91,7 +92,12 @@ my $server = Linux::Event::WebSocket::Server->new(
     host => '127.0.0.1',
     port => 0,
 
+    on_open => sub ($ws) {
+        push @{$state->{server_sequence}}, 'open';
+    },
+
     on_message => sub ($ws, $payload, $type) {
+        push @{$state->{server_sequence}}, 'message';
         $state->{server_message} = [ $type, $payload ];
         $ws->send_text("echo:$payload");
     },
@@ -129,6 +135,11 @@ like($state->{response_head} // '',
     'server returns a 101 response');
 is_deeply($state->{server_message}, [ text => 'hello' ],
     'first frame in the HTTP request read survives the protocol transition');
+is_deeply(
+    $state->{server_sequence},
+    [qw(open message)],
+    'server opens before delivering the same-read frame',
+);
 is($state->{client_message}, 'echo:hello',
     'transitioned server writes a WebSocket response');
 
@@ -230,6 +241,10 @@ $server->close;
         'first frame in the HTTP response read survives the protocol transition');
     is($client_state->{status}, 101,
         'client retains the combined Upgrade response');
+    ok(
+        !$websocket_client->connection->can('on_data'),
+        'established client uses native raw input instead of Perl on_data',
+    );
 }
 
 done_testing;

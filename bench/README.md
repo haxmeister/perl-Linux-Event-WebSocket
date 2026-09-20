@@ -14,11 +14,19 @@ measurement starts only after every requested client has reached `on_open`.
 The `window` option controls how many messages remain in flight per
 connection.
 
+`application.pl` measures a small application-style request/ack workload through
+the same public client and server APIs. Clients send JSON-like text messages,
+the server performs a small application-level check and returns a fixed JSON
+acknowledgement, and each client maintains a bounded in-flight window. HTTP
+Upgrade time is excluded. This is intended to exercise realistic established
+message traffic without specializing the implementation for an echo server.
+
 Examples:
 
     perl -Iblib/lib bench/protocol.pl
     perl -Iblib/lib bench/echo.pl --type binary --bytes 64 --clients 1 --window 32
     perl -Iblib/lib bench/echo.pl --type text --bytes 1024 --clients 10 --window 8
+    perl -Iblib/lib bench/application.pl --bytes 1024 --clients 20 --window 4
 
 GitHub Actions provides repeatable regression samples, but hosted-runner numbers
 should not be treated as absolute hardware-independent performance claims.

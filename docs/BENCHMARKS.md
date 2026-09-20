@@ -3,11 +3,118 @@
 These measurements guide implementation decisions. They are not published as
 hardware-independent performance claims.
 
+## Current native-engine decision
+
+The production integration now uses the locally patched vendored bq core
+through XS. This decision followed same-run experiments against the previous
+Perl engine and a wslay prototype.
+
+Representative optimized-bq results included:
+
+| workload | previous main | wslay | optimized bq |
+| --- | ---: | ---: | ---: |
+| text 64 B, 1 client | ~28k/s | ~68k/s | ~95k/s |
+| text 1 KiB, 1 client | ~26k/s | ~44k/s | ~84k/s |
+| text 16 KiB, 1 client | ~9.9k/s | ~5.2k/s | ~25k/s |
+| text 64 B, 100 clients | ~22k/s | ~53k/s | ~69k/s |
+
+One-way realistic mixed JSON/emoji traffic also favored bq. A corrected
+client-to-server sample measured about 82.5k/s at 64 B, 60.1k/s at 1 KiB, and
+11.85k/s at 16 KiB, versus about 63.8k/18.0k/1.46k for wslay and
+34.7k/9.95k/0.81k for the previous main implementation.
+
+A pub/sub fan-out benchmark, where one producer message was broadcast and
+actually received by every subscriber before the next cycle, measured
+approximately 61.5k aggregate deliveries/s at 256 B / 100 subscribers,
+56.6k/s at 1 KiB / 100, and 20.6k/s at 16 KiB / 100. The same cases were about
+46.9k/27.0k/2.7k for wslay and 35.6k/16.9k/1.49k for previous main.
+
+These are development-runner measurements, not universal performance claims.
+Their role is architectural: the gains were large, repeated across realistic
+workloads, and survived the full correctness gates.
+
+## Raw native-input boundary
+
+Linux::Event 0.115 adds a raw native-consumer ABI that exposes the borrowed
+ordered-byte input window before core materializes the read as a Perl SV.
+`bench/raw-input-boundary.pl` was used to compare that path against the
+previous `on_data -> _Engine::feed` receive boundary while keeping the same
+bq protocol engine and the same `_Engine` application delivery.
+
+The workload is one-way masked client traffic rather than echo. Text cases use
+valid UTF-8 JSON-like payloads containing non-ASCII data; binary cases use byte
+payloads. The producer writes continuously through a nonblocking raw watcher,
+the benchmark warms the path before measurement, and the message callback uses
+a wall-clock cutoff.
+
+A same-run Perl 5.44 hosted-runner sample after direct Engine dispatch measured:
+
+| workload | current Perl input | raw ABI | raw delta |
+| --- | ---: | ---: | ---: |
+| text 64 B | 402,039 msg/s | 407,898 msg/s | +1.5% |
+| binary 64 B | 447,075 msg/s | 455,547 msg/s | +1.9% |
+| text 1 KiB | 286,230 msg/s | 322,621 msg/s | +12.7% |
+| binary 1 KiB | 327,759 msg/s | 384,722 msg/s | +17.4% |
+| text 16 KiB | 48,097 msg/s | 67,860 msg/s | +41.1% |
+| binary 16 KiB | 66,444 msg/s | 108,853 msg/s | +63.8% |
+
+The size-dependent result is consistent with eliminating the Perl read-scalar
+copy: the benefit is small at 64 B, material by 1 KiB, and large at 16 KiB.
+
+An earlier raw adapter revision appeared about 17-18% slower than the current
+path at 64 B. That was not a core-ABI limitation. The adapter sent every
+completed message through a Perl method on the Stream, which then called
+`_Engine::_bq_event`, adding one unnecessary Perl dispatch per message. The
+final provider retains the actual Engine once and invokes `_bq_event`
+directly from XS. Removing that wrapper changed 64-byte traffic from a material
+loss to a small win while increasing the gains at larger payloads.
+
+The raw provider also keeps the Engine `in_feed` guard in XS so application
+sends from receive callbacks preserve the existing non-reentrant behavior.
+Regression coverage includes split input, text/binary messages, Ping/Pong, and
+Close.
+
+The raw provider is now the established receive path used by the public client
+and server APIs. The HTTP opening exchange uses a temporary native byte bridge,
+then Linux::Event replaces that provider with the bq WebSocket consumer at the
+101 protocol transition.
+
+### Public application A/B
+
+A same-run public-API comparison built `feature/bq-native-engine` as the
+pre-raw baseline and the raw-ABI integration from the current branch on the
+same GitHub runner. The workload used 20 public WebSocket clients with a window
+of four in-flight requests per connection. Clients sent JSON-like text
+messages; the server performed a small application-level check and returned a
+fixed JSON acknowledgement. HTTP Upgrade time was excluded.
+
+Five alternating baseline/raw samples were collected for each payload size.
+Median results were:
+
+| request payload | pre-raw baseline | raw ABI public path | delta |
+| --- | ---: | ---: | ---: |
+| 256 B | 52,719 txn/s | 59,279 txn/s | +12.4% |
+| 1 KiB | 49,200 txn/s | 55,760 txn/s | +13.3% |
+| 16 KiB | 24,739 txn/s | 28,380 txn/s | +14.7% |
+
+Median ingress throughput moved from 12.87 to 14.47 MiB/s at 256 B, 48.05 to
+54.45 MiB/s at 1 KiB, and 386.54 to 443.44 MiB/s at 16 KiB.
+
+This workload is deliberately not an echo server: request payload and response
+payload differ, application logic runs on the server, and throughput is counted
+as completed request/ack transactions. The result confirms that the raw-input
+boundary survives integration through the real HTTP Upgrade and public
+WebSocket APIs.
+
 ## Method
 
 Repository author benchmarks live under `bench/`.
 
 - `protocol.pl` isolates framing, masking, parsing, and UTF-8 validation.
+- `raw-input-boundary.pl` compares the old Perl input boundary with the
+  Linux::Event raw native-consumer ABI using the same bq/Engine message path.
+- `application.pl` measures public request/ack application traffic with
+  JSON-like text requests and fixed acknowledgements.
 - `echo.pl` measures steady-state round trips through the public WebSocket
   client and server APIs.
 - HTTP Upgrade time is excluded from steady-state measurements.
@@ -17,10 +124,10 @@ Repository author benchmarks live under `bench/`.
 The first baseline was taken on Perl 5.44 on an Ubuntu GitHub runner using an
 AMD EPYC 7763-class host.
 
-## Bottleneck 1: client mask randomness
+## Historical Bottleneck 1: client mask randomness
 
-The original implementation opened, read, and closed `/dev/urandom` for every
-client frame.
+The original pure-Perl implementation opened, read, and closed `/dev/urandom`
+for every client frame.
 
 A same-run microbenchmark measured approximately:
 
@@ -31,10 +138,11 @@ A same-run microbenchmark measured approximately:
 | 1 KiB masked frame encode | 86k/s | 239k/s |
 | 16 KiB masked frame encode | 43k/s | 70k/s |
 
-The production implementation now keeps one lazy, close-on-exec
-`/dev/urandom` descriptor and reuses it. No native code was required.
+The pure-Perl implementation was improved by keeping one lazy, close-on-exec
+`/dev/urandom` descriptor. The current native engine supersedes that path and
+uses Linux `getrandom(2)` for client mask keys.
 
-## Bottleneck 2: UTF-8 validation
+## Historical Bottleneck 2: UTF-8 validation
 
 The first RFC 3629 validator walked every byte in Perl. That was correct but
 became the dominant cost for text messages.
@@ -47,19 +155,14 @@ Representative original validation rates were approximately:
 | 1 KiB | 10k/s |
 | 16 KiB | 655/s |
 
-A full RFC regular expression did not scale well enough. The chosen production
-path instead:
+A full RFC regular expression did not scale well enough. The pure-Perl path was
+improved with an ASCII fast path plus C-backed decoding.
 
-1. uses a cheap C-regex ASCII fast path;
-2. uses Perl's C-backed `utf8::decode` for non-ASCII input;
-3. explicitly rejects surrogate values and values above U+10FFFF so Perl's
-   wider internal code-point range cannot loosen RFC 3629.
-
-After that change, a representative run measured production validation at about
-1.09M/s for 64-byte ASCII, 643k/s for 1 KiB, and 67k/s for 16 KiB.
-
-The normal test suite and both Autobahn client/server conformance runs remained
-green after the change.
+The current native engine supersedes that implementation. Inbound and outbound
+text now use Perl's C UTF-8 API directly from XS with the RFC 3629 boundary.
+That avoids a Perl-level validation/copy pass while preserving rejection of
+overlong encodings, surrogates, Perl-extended UTF-8, and values above
+U+10FFFF. Unicode noncharacters remain permitted.
 
 ## End-to-end effect
 
@@ -83,13 +186,13 @@ GitHub-runner values should not be compared too literally across runs.
 
 ## Native-code conclusion
 
-The benchmark pass found real bottlenecks, but both had strong Perl-level
-solutions. Current evidence does **not** justify WebSocket-specific XS.
+The early pure-Perl optimizations were useful and remain documented below, but
+later end-to-end measurements changed the conclusion. The vendored bq engine
+with a thin XS adapter materially improves the real protocol path, especially
+for medium/large text, Unicode-heavy traffic, concurrency, and fan-out.
 
-Native code should be reconsidered only after a future stable benchmark shows a
-remaining protocol-layer bottleneck that is material in end-to-end workloads.
-Masking or parsing are plausible future candidates, but neither is currently a
-reason to add C/XS maintenance burden.
+The native code therefore belongs in Linux::Event::WebSocket. Linux::Event core
+remains unchanged because this optimization is protocol-specific.
 
 ## Cross-implementation comparison
 
@@ -108,47 +211,38 @@ CPU 0 and the driver/peer to CPU 1. Go is constrained to `GOMAXPROCS=1`.
 Each case warms up for 0.5 seconds and measures for 1.5 seconds after the
 WebSocket handshake.
 
-A representative same-run server comparison on an AMD EPYC runner measured:
+A post-integration same-run server comparison from draft PR #9 measured:
 
 | case | Linux::Event | Mojolicious | Node ws | Gorilla |
 | --- | ---: | ---: | ---: | ---: |
-| binary 64 B, 1 conn | 32.9k | 38.4k | 146.6k | 166.1k |
-| binary 1 KiB, 1 conn | 30.7k | 35.3k | 132.6k | 142.3k |
-| binary 16 KiB, 1 conn | 21.1k | 17.1k | 61.3k | 39.3k |
-| binary 64 B, 100 conn | 32.5k | 32.1k | 139.2k | 145.0k |
-| text 64 B, 1 conn | 29.3k | 34.9k | 139.2k | 153.5k |
-| text 1 KiB, 1 conn | 25.8k | 31.3k | 124.1k | 126.5k |
-| text 16 KiB, 1 conn | 10.5k | 13.4k | 33.1k | 35.5k |
-| text 64 B, 100 conn | 28.9k | 29.7k | 127.2k | 130.5k |
+| binary 64 B, 1 conn | 147.7k | 43.9k | 168.1k | 192.0k |
+| binary 1 KiB, 1 conn | 132.2k | 40.1k | 154.1k | 165.3k |
+| binary 16 KiB, 1 conn | 39.2k | 19.0k | 72.9k | 45.1k |
+| binary 64 B, 100 conn | 123.4k | 37.2k | 160.8k | 166.0k |
+| text 64 B, 1 conn | 156.0k | 39.9k | 158.5k | 174.2k |
+| text 1 KiB, 1 conn | 138.6k | 35.2k | 142.8k | 143.6k |
+| text 16 KiB, 1 conn | 38.7k | 14.6k | 39.1k | 41.3k |
+| text 64 B, 100 conn | 125.1k | 33.5k | 146.3k | 146.2k |
 
 The mirror client comparison on the same runner measured:
 
 | case | Linux::Event | Mojolicious | Node ws | Gorilla |
 | --- | ---: | ---: | ---: | ---: |
-| binary 64 B, 1 conn | 29.9k | 42.8k | 151.1k | 160.2k |
-| binary 1 KiB, 1 conn | 28.1k | 39.7k | 137.2k | 135.6k |
-| binary 16 KiB, 1 conn | 20.7k | 22.7k | 58.1k | 25.6k |
-| binary 64 B, 100 conn | 29.3k | 38.3k | 138.6k | 144.1k |
-| text 64 B, 1 conn | 27.1k | 40.0k | 138.8k | 156.2k |
-| text 1 KiB, 1 conn | 24.3k | 36.7k | 124.9k | 136.4k |
-| text 16 KiB, 1 conn | 12.7k | 19.8k | 33.4k | 21.9k |
-| text 64 B, 100 conn | 26.6k | 36.0k | 127.9k | 140.8k |
+| binary 64 B, 1 conn | 133.8k | 47.9k | 170.6k | 184.4k |
+| binary 1 KiB, 1 conn | 126.5k | 45.1k | 157.8k | 157.0k |
+| binary 16 KiB, 1 conn | 40.2k | 25.4k | 72.6k | 25.9k |
+| binary 64 B, 100 conn | 113.0k | 43.6k | 159.9k | 159.8k |
+| text 64 B, 1 conn | 138.0k | 45.5k | 159.4k | 179.0k |
+| text 1 KiB, 1 conn | 126.1k | 41.5k | 141.4k | 155.6k |
+| text 16 KiB, 1 conn | 46.1k | 22.7k | 34.9k | 25.5k |
+| text 64 B, 100 conn | 114.6k | 40.5k | 145.9k | 158.0k |
 
-The comparison shows that Linux::Event::WebSocket is close to Mojolicious for
-server-side concurrency and exceeds it for the representative 16 KiB binary
-server case, while Mojolicious retains a moderate advantage on most small and
-medium messages. The native-heavy Node and Go implementations remain several
-times faster on small-message workloads.
-
-The client comparison shows a larger Perl-to-Perl gap: Linux::Event is commonly
-about 64-91% of Mojolicious throughput depending on payload, with the closest
-result again on larger binary messages.
-
-These results do not point to masking or standalone parsing as the dominant
-remaining cost. The private parser/masking microbenchmarks are much faster than
-the public end-to-end rates. The next useful performance investigation is
-therefore profiling the complete parser -> engine -> connection -> callback
-dispatch path rather than adding WebSocket-specific XS speculatively.
+These are hosted-runner measurements and should not be interpreted as universal
+rankings. They do show that the integrated native path is no longer in the same
+performance regime as the earlier Perl implementation: server text throughput
+is close to Node/Gorilla in the tested 64 B through 16 KiB single-connection
+cases, and Linux::Event's 16 KiB text client exceeds both comparison clients in
+this run.
 
 ## Timer-fairness observation
 

@@ -1,53 +1,29 @@
-# Linux::Event::WebSocket Handoff
+# Linux::Event::WebSocket handoff
 
-## Repository
+Repository: `haxmeister/perl-Linux-Event-WebSocket`
+Integration target: `main`
+Validated integration branch: `experiment/raw-buffer-abi`
+Based on validated native-engine branch: `feature/bq-native-engine`
+Development version: `0.001_002`
+No CPAN release has been made.
 
-`haxmeister/perl-Linux-Event-WebSocket`, branch `main`.
+## Project boundary
 
-Development version: `0.001_001`. No CPAN release has been made.
+Work in this repository only unless the user explicitly authorizes another
+repository in the current chat. Do not modify Linux::Event core,
+Linux::Event::HTTP, Uniform::HTTP, or another distribution from this project.
 
-Do not modify Linux::Event core, Linux::Event::HTTP, Uniform::HTTP, or another
-repository unless the user explicitly authorizes it.
+## Current integration direction
 
-## Current implementation
+The performance investigation has moved from experimentation to productization.
 
-The distribution contains its own private RFC 6455 implementation and has no
-external WebSocket protocol-engine dependency.
+The selected production direction is a small vendored `bq_websocket` protocol
+core behind a private XS adapter. Linux::Event still owns epoll, sockets, TLS,
+ordered bytes, buffering, backpressure, timers, and lifecycle.
+Linux::Event::HTTP still owns the HTTP/1.1 Upgrade. bq is used only after the
+connection has transitioned to WebSocket.
 
-Public coordinators and connections:
-
-```text
-Linux::Event::WebSocket::Server
-Linux::Event::WebSocket::Client
-Linux::Event::WebSocket::Connection
-Linux::Event::WebSocket::Client::Connection
-Linux::Event::WebSocket::Server::Connection
-```
-
-Private protocol modules:
-
-```text
-Linux::Event::WebSocket::_Random
-Linux::Event::WebSocket::_Handshake
-Linux::Event::WebSocket::_Frame
-Linux::Event::WebSocket::_Parser
-Linux::Event::WebSocket::_Engine
-Linux::Event::WebSocket::_State
-Linux::Event::WebSocket::_UTF8
-```
-
-The implementation supports `ws://` and `wss://`, text and binary messages,
-fragmentation with interleaved control frames, UTF-8 validation, client masking,
-automatic pong, graceful close with timeout, hard abort, subprotocols,
-message-size limits, and access to HTTP handshake objects.
-
-Linux::Event owns transport and TLS. Linux::Event::HTTP owns the opening HTTP/1.1
-exchange. The same Stream is transitioned in place, preserving object identity,
-queued output, TLS state, application state, and post-header bytes.
-
-## Public behavior
-
-Common methods:
+The public API remains unchanged:
 
 ```text
 send_text  send_binary  ping  close  abort
@@ -55,193 +31,220 @@ is_open    is_closing   subprotocol  secure  url
 handshake_request  handshake_response  data
 ```
 
-Callbacks:
+## Native engine
+
+Established receive path:
 
 ```text
-on_open  on_message  on_close  on_error  on_drain
+Linux::Event native input
+    -> WebSocket raw consumer / bq
+    -> _Engine
+    -> application callback
 ```
 
-The server also accepts `on_handshake`.
+The HTTP opening exchange uses a WebSocket-owned temporary native byte bridge
+into the existing Linux::Event::HTTP parser. Linux::Event then replaces that
+provider with the bq WebSocket consumer at the 101 transition while preserving
+post-Upgrade input.
 
-The connection design uses ordinary single inheritance only. Do not introduce
-roles, mixins, multiple inheritance, or method injection.
+Inbound text is validated in XS with Perl's C UTF-8 API using the RFC 3629
+boundary. Outbound `send_text` validation/encoding is also done in XS. Binary
+messages remain byte strings.
 
-## Tests
+Client frame masks use Linux `getrandom(2)`.
 
-The test suite includes:
+The older private `_Parser` and frame-encoding portions of `_Frame` are no
+longer the production parser/encoder. They remain valuable as independent test
+and benchmark references. `_Frame` still provides close-code policy used by
+the production Engine.
 
-```text
-t/00-load.t
-t/01-handshake.t
-t/02-frame-parser.t
-t/03-engine.t
-t/04-utf8.t
-t/10-client-server.t
-t/11-message-types.t
-t/12-upgrade-tail.t
-t/13-core-close-boundary.t
-t/14-close-lifecycle.t
-t/20-tls-client-server.t
-```
+## Vendored bq ownership
 
-Coverage includes deterministic RFC handshake vectors, incremental parsing,
-masking and length policy, fragmentation, control frames, close errors, size
-limits, production HTTP handoff, same-read Upgrade tails, object identity,
-subprotocols, TLS, the Linux::Event protocol-subclass close boundary, abrupt
-transport loss, simultaneous close, and peer loss during local close.
+Upstream commit:
+`6c188d3f0edca38d7a8926e0d30f4c145414ba4c`
 
-CI targets Perl 5.36 and Perl 5.44.
+License used for the vendored source: MIT.
 
-Repository-only Autobahn server and client conformance are green. Both RFC
-6455 runs execute 301 selected cases and exclude sections 12 and 13, which
-cover optional WebSocket compression/permessage-deflate. Each side currently
-reports 294 strict OK, 4 NON-STRICT, and 3 INFORMATIONAL outcomes; close
-behavior reports 298 OK and 3 INFORMATIONAL outcomes. There are no conformance
-failures.
+The vendored source is intentionally patched. See
+`vendor/bq_websocket/README.md` before updating it. Maintained differences
+include secure Linux mask generation, RFC close validation, oversized-control
+rejection before side effects, one-Pong-per-Ping behavior, and safe Close echo
+ownership.
 
-The first Autobahn run exposed one real issue: Perl Encode's strict UTF-8 policy
-rejects Unicode noncharacters that RFC 3629 permits. The private `_UTF8`
-validator now implements the RFC 3629 byte boundary directly and is covered by
-`t/04-utf8.t`.
+Do not replace the vendored files with a fresh upstream copy without
+re-applying those policies and rerunning normal tests plus both Autobahn
+directions.
 
-## Performance baseline
+## Why this engine was selected
 
-Repository author benchmarks now cover protocol primitives and steady-state
-public client/server echo workloads. The first pass found two concrete
-bottlenecks:
+The decision is based on repeated same-run measurements, not an echo-only
+microbenchmark.
 
-- opening and closing `/dev/urandom` for every client mask;
-- byte-by-byte Perl UTF-8 validation.
+The optimized bq path materially beat the previous Perl engine and the wslay
+prototype across:
 
-Both were resolved without XS. `_Random` now reuses a lazy close-on-exec random
-descriptor. `_UTF8` uses an ASCII fast path plus C-backed `utf8::decode` with
-explicit RFC 3629 scalar-range checks.
+- small and medium text/binary messages;
+- large 16 KiB messages;
+- one-way client/server traffic;
+- realistic mixed JSON/emoji text;
+- European, CJK, and emoji-heavy UTF-8;
+- 100-client traffic;
+- broadcast fan-out at 10, 100, and 1000 subscribers.
 
-Representative hosted-runner results improved 1 KiB text echo from roughly
-1.4k to 14.7k msg/s and 16 KiB text echo from roughly 97 to 5.7k msg/s.
-Normal CI and Autobahn client/server conformance remain green.
+The clean integration branch's external server comparison measured about
+156k/s for 64-byte text, 139k/s for 1 KiB text, 38.7k/s for 16 KiB text, and
+125k/s for 64-byte text at 100 connections. The corresponding client rates were
+about 138k/s, 126k/s, 46.1k/s, and 115k/s.
 
-See `docs/BENCHMARKS.md`.
+The 100-subscriber fan-out test measured about 61.5k deliveries/s at 256 B,
+56.6k/s at 1 KiB, and 20.6k/s at 16 KiB.
 
-Cross-implementation server and client benchmarks are now complete against
-Mojolicious 9.49, Node `ws` 8.21.3 + `bufferutil`, and Go
-`gorilla/websocket` 1.5.3 using common peers and same-run CPU isolation.
+See `docs/BENCHMARKS.md` for context. Hosted-runner values are architectural
+evidence, not hardware-independent performance claims.
 
-Representative server results put Linux::Event close to Mojolicious under
-64-byte 100-connection load (32.5k vs 32.1k binary; 28.9k vs 29.7k text) and
-ahead of Mojolicious for 16 KiB binary (21.1k vs 17.1k). Mojolicious is still
-moderately faster on most small/medium single-connection cases. Node and Go are
-several times faster on small-message workloads.
+## Integration validation
 
-The mirror client comparison shows Linux::Event around 64-91% of Mojolicious
-depending on payload, with the smallest gap on larger binary messages.
+The clean integration branch independently passed normal tests on Perl 5.36 and
+5.44. Its generated 0.001_002 distribution archive includes WebSocket.xs and
+the vendored bq source/license, rebuilds after extraction, and passes make test.
 
-Standalone parser/masking rates are much higher than the public-stack rates, so
-the remaining performance work is focused on full per-message dispatch overhead,
-not speculative XS.
+Autobahn client and server both complete all 301 selected RFC 6455 cases with
+zero conformance failures:
 
-A first full client-path NYTProf run (GitHub Actions run 35407218947) confirmed
-that this overhead is distributed rather than concentrated in masking alone.
-For roughly 8k binary messages, validated WebSocket state lookup ran about 33k
-times, the weakened Engine connection was dereferenced about 25k times, and
-frame opcode-to-type lookup ran about 16k times. The 1 KiB text profile also
-showed the parser's local copy of its accumulated input becoming materially more
-expensive under coalesced traffic, and ASCII text was being validated/copied
-again on the echo send path.
+- 287 OK;
+- 11 NON-STRICT;
+- 3 INFORMATIONAL;
+- close behavior: 298 OK, 3 INFORMATIONAL.
 
-The first optimization pass collapsed repeated established-state lookups,
-cached the hot message callback at open time, cached the Engine connection while
-feeding a batch, kept the parser on its owned input buffer instead of a
-copy-on-write local alias, reused the parser's resolved frame type, added a
-common short-length size-check fast path, and avoided redundant outbound ASCII
-validation.
+The 11 NON-STRICT cases are understood. Seven are coalesced-read ordering cases
+where bq closes with 1002 on a later malformed frame without first exposing a
+completed preceding message. Four are fragmented-invalid-UTF-8 cases where bq
+waits for logical-message completion before closing with 1007. Autobahn accepts
+both behaviors. A trial change to force the first seven to strict-OK exposed
+reentrancy/batching consequences and was reverted rather than compromising the
+validated hot path.
 
-That pass is green in normal CI and Autobahn. Under the identical NYTProf
-workflow, binary 64-byte client throughput rose from about 4.1k to 7.4k msg/s
-and text 1 KiB from about 3.5k to 6.5k msg/s. Validated state lookup dropped
-from about four calls per message to one, Engine connection dereference from
-about three to one, opcode/type lookup from two to one, and the text byte-copy
-path from two to one.
+The Autobahn report checker now requires exactly 301 cases per agent so a
+truncated run cannot pass CI.
 
-Comparison run 35407582470 landed on an AMD EPYC 7763 runner, while the prior
-35406148646 baseline used an Intel Xeon Platinum 8573C, so their absolute
-throughput must not be compared directly. Within that AMD run Linux::Event still trailed Mojolicious, so a second
-pure-Perl pass added a fixed 4-byte mask-key path, specialized text/binary data
-frame encoding, a trusted established-state fast lookup, cached direct message
-delivery, and an inlined common unfragmented Engine path. Normal tests and
-Autobahn are green after the accompanying test placement correction.
+Sections 12 and 13 remain intentionally excluded because permessage-deflate is
+not implemented.
 
-Comparison run 35408108321 then landed on an AMD EPYC 9V74 runner. In that
-same-run matrix Linux::Event now decisively beats Mojolicious on server binary
-64 B / 1 KiB (56.2k / 51.3k vs 34.8k / 32.3k), client binary 64 B / 1 KiB
-(46.1k / 41.5k vs 37.4k / 34.0k), server text 64 B / 1 KiB
-(44.7k / 36.7k vs 31.8k / 27.9k), and client text 64 B
-(41.6k vs 34.4k). The remaining common-path miss is client text 1 KiB
-(27.8k vs 32.4k), with large text also still behind.
+## Integration checklist
 
-Profiling and a focused Perl microbenchmark identify duplicate ASCII UTF-8
-validation as the next target. C-backed utf8::decode validates 1 KiB ASCII
-several times faster than the current byte-range regex. The next pass therefore
-uses utf8::decode plus a decoded-length ASCII test, retaining the explicit
-surrogate/out-of-range scalar check for non-ASCII input so RFC 3629 behavior is
-unchanged.
+- [x] Start clean integration branch from `main`.
+- [x] Carry over only production bq/XS code and RFC regression tests.
+- [x] Vendor upstream source and license inside this distribution.
+- [x] Remove dependence on a system bq library.
+- [x] Document local vendored-source patches.
+- [x] Move inbound/outbound text validation into the measured native path.
+- [x] Update architecture and benchmark documentation.
+- [x] Make Autobahn/comparison/benchmark workflows load `blib/arch`.
+- [x] Add a distribution-archive CI check for vendored source/license.
+- [x] Normal CI green on Perl 5.36 and 5.44 on this integration branch.
+- [x] Distribution archive builds and its extracted copy passes `make test`.
+- [x] Autobahn client green on this integration branch.
+- [x] Autobahn server green on this integration branch.
+- [x] Full cross-implementation comparison completes on this integration branch.
+- [x] Review the resulting branch diff for experiment-only files or behavior.
+- [x] Activate the raw native-consumer path through the real HTTP Upgrade.
+- [x] Validate provider replacement and same-read post-101 delivery.
+- [x] Validate reentrant abort/close on Perl 5.36 and 5.44.
+- [x] Benchmark the public application path against the pre-raw baseline.
+- [x] Merge the validated raw-ABI integration into `main`.
 
-The first timer-driven client benchmark also exposed a separate Linux::Event
-core fairness concern: under sustained external echo traffic, nominal
-1.5-second timers were delayed by tens of seconds. The benchmark now uses a
-wall-clock cutoff so results are valid. Do not modify core for this without
-explicit user authorization.
+## Core reentrant-close validation
 
-Current measurements still do not justify WebSocket-specific XS by themselves.
+Linux::Event main commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`
+fixes the raw-consumer reentrant-close accounting bug exposed by the WebSocket
+integration.
 
-## Resolved core close boundary
+Validation is complete against that core commit:
 
-The inherited Stream `close()` collision has been resolved in Linux::Event
-0.115. Core involuntary teardown now bypasses protocol-subclass public
-`close()` semantics, while explicit semantic close requests remain virtual.
+- Perl 5.36 production tests pass;
+- Perl 5.44 production tests pass;
+- the generated distribution archive rebuilds and passes its tests;
+- same-read HTTP -> WebSocket provider replacement preserves post-101 input;
+- server and client deliver `open` before a same-read first message;
+- application `abort()` and close callbacks may close reentrantly from raw
+  consumer delivery without corrupting core input accounting.
 
-This distribution now requires Linux::Event 0.115 or newer.
-`t/13-core-close-boundary.t` verifies the WebSocket side of that contract.
+## Raw-buffer ABI production integration
 
-## Current decision and remaining release work
+Linux::Event 0.115 exposes a protocol-neutral raw native-consumer ABI and now
+supports safe provider replacement across `transition_to()`.
 
-Do **not** proceed to release-readiness yet. The user considers Mojolicious a
-low-performance Perl baseline and requires Linux::Event::WebSocket to
-**decisively outperform it** on the common small/medium-message paths before
-the first release.
+The WebSocket distribution uses two consumers:
 
-Next task:
+1. The private HTTP handshake connection uses a small WebSocket-owned bridge
+   consumer. It materializes the borrowed native window and passes it to the
+   existing Linux::Event::HTTP `on_data` parser. It does not parse HTTP.
+2. After the 101 handoff, Linux::Event replaces that bridge with the bq
+   WebSocket raw consumer. Preserved post-101 bytes are re-driven through bq
+   after the live Stream has been reblessed to the WebSocket connection class.
 
-1. Profile the complete per-message hot path, especially the client path:
-   Stream -> on_data -> state lookup -> engine -> parser -> engine dispatch ->
-   connection dispatch -> application callback -> send.
-2. Remove avoidable Perl-layer dispatch/state/call overhead and rerun the
-   same cross-implementation benchmark after each meaningful change.
-3. Prefer pure-Perl structural wins first. Add WebSocket-specific XS only when
-   profiling identifies a measured bottleneck that cannot be removed cleanly
-   in Perl.
-4. Preserve the current Autobahn-green behavior while optimizing.
-5. Only after Linux::Event::WebSocket clearly passes Mojolicious on the target
-   benchmark matrix should the release-readiness review begin.
+The established provider:
 
-Important baseline: server performance is already close to or ahead of
-Mojolicious in some cases, but the client path remains the clearest deficit
-(roughly 64-91% of Mojolicious depending on payload).
+- is declared through `_BQ->raw_consumer_definition`;
+- does no Perl work during provider `create()`;
+- lazily creates/adopts bq state on first WebSocket input;
+- retains the actual `_Engine` object for direct XS event delivery;
+- creates payload SVs only for completed application messages;
+- preserves the Engine `in_feed` guard while bq drains input;
+- flushes native Ping/Close output through the existing Stream write path;
+- retains/releases the Linux::Event host around callback-capable input work.
 
-Separate core follow-up, not authorized in this project: investigate timer
-fairness under continuously ready external I/O.
+Regression coverage includes split masked input, text/binary delivery,
+automatic Pong output, normal and simultaneous Close lifecycle, same-read
+HTTP->WebSocket handoff in both directions, open-before-message ordering, and
+reentrant application abort/close.
+
+The full production suite is green on Perl 5.36 and 5.44 against Linux::Event
+core commit `1c3de59e395e05e79c735f5d5ef35cd5021e8c55`, and the generated
+distribution archive rebuilds and passes its tests.
+
+The focused raw boundary benchmark showed gains ranging from about +1.5% at
+64-byte text to +63.8% at 16 KiB binary when compared with the old
+`on_data -> Engine::feed` boundary.
+
+More importantly, a same-run public application benchmark compared
+`feature/bq-native-engine` with the integrated raw path using 20 public
+clients, four in-flight requests per connection, JSON-like text requests, a
+small server-side application check, and fixed acknowledgements. Five-sample
+medians were:
+
+| payload | pre-raw baseline | raw ABI | delta |
+| --- | ---: | ---: | ---: |
+| 256 B | 52,719 txn/s | 59,279 txn/s | +12.4% |
+| 1 KiB | 49,200 txn/s | 55,760 txn/s | +13.3% |
+| 16 KiB | 24,739 txn/s | 28,380 txn/s | +14.7% |
+
+These are hosted-runner measurements and should be treated as architectural
+evidence rather than portable absolute throughput claims.
+
+
+## Core boundary
+
+Do not modify Linux::Event core from this WebSocket project without explicit
+authorization. The generic raw-consumer, provider-replacement, and reentrant
+terminal-accounting facilities required by this integration now exist in
+Linux::Event 0.115/main and are consumed here without WebSocket-specific core
+code.
+
+A separate timer-fairness issue was observed under sustained ready I/O, but it
+is also outside this repository unless explicitly authorized.
 
 ## Files to read first
 
 ```text
 docs/ARCHITECTURE.md
 docs/BENCHMARKS.md
-lib/Linux/Event/WebSocket/Connection.pm
-lib/Linux/Event/WebSocket/_Handshake.pm
-lib/Linux/Event/WebSocket/_Parser.pm
+vendor/bq_websocket/README.md
+WebSocket.xs
+lib/Linux/Event/WebSocket/_BQ.pm
 lib/Linux/Event/WebSocket/_Engine.pm
-lib/Linux/Event/WebSocket/_UTF8.pm
-t/04-utf8.t
+lib/Linux/Event/WebSocket/Connection.pm
+t/03-engine.t
 t/10-client-server.t
 t/12-upgrade-tail.t
 t/13-core-close-boundary.t

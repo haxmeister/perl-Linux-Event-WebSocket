@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.001_001';
+our $VERSION = '0.001_002';
 
 1;
 
@@ -26,10 +26,16 @@ support on top of Linux::Event.
 Linux::Event owns the live socket, TLS transport, ordered byte buffering,
 backpressure, and protocol transition. Linux::Event::HTTP owns the opening
 HTTP/1.1 Upgrade exchange. Private modules in this distribution own RFC 6455
-handshake validation, framing, masking, fragmentation, and control semantics.
+handshake validation, framing, masking, fragmentation, text validation, and
+control semantics.
 
-The WebSocket protocol engine is intentionally kept behind private classes so
-it can evolve without changing the public Linux::Event API.
+The production frame/message path uses a small vendored C protocol core through
+a private XS adapter. No external WebSocket C library is required at install
+time. Linux::Event still owns the socket and event loop; the native code is
+limited to WebSocket-specific protocol work.
+
+The protocol engine is intentionally kept behind private classes so it can
+evolve without changing the public Linux::Event API.
 
 =head1 STATUS
 

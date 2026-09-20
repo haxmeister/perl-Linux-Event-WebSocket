@@ -11,6 +11,12 @@ WriteMakefile(
     AUTHOR        => 'Joshua S. Day <haxmeister@hotmail.com>',
     LICENSE       => 'perl_5',
     MIN_PERL_VERSION => '5.036000',
+    XS => {
+        'WebSocket.xs' => 'WebSocket.c',
+    },
+    clean => {
+        FILES => 'WebSocket.c',
+    },
     META_MERGE => {
         'meta-spec' => { version => 2 },
         resources => {

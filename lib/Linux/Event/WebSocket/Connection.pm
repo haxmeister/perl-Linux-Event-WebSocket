@@ -9,11 +9,18 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use utf8 ();
 
+use Linux::Event::Framer ();
 use Linux::Event::Kernel::Timer;
+use Linux::Event::WebSocket::_BQ ();
 use Linux::Event::WebSocket::_Engine;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 use Linux::Event::WebSocket::_UTF8;
+
+Linux::Event::Framer->declare_native_consumer(
+    __PACKAGE__,
+    Linux::Event::WebSocket::_BQ->raw_consumer_definition,
+);
 
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;
@@ -52,20 +59,38 @@ sub _dispatch_websocket ($self, $name, @argument) {
     return;
 }
 
-sub _initialize_engine ($self, $state = undef) {
+sub _initialize_engine ($self, $state = undef, $native = undef) {
     $state //= $self->_websocket_state;
     return $state->{engine} if $state->{engine};
 
+    my %native = defined($native) ? (native => $native) : ();
     $state->{engine} = Linux::Event::WebSocket::_Engine->new(
         connection       => $self,
         endpoint_type    => $state->{endpoint_type},
         max_message_size => $state->{max_message_size},
         message_handler  => $state->{message_handler},
+        %native,
     );
     return $state->{engine};
 }
 
-sub _ensure_websocket_open ($self) {
+sub _prepare_message_handler ($self, $state) {
+    $state->{message_handler} = $state->{callbacks}{message}
+        // $self->can('websocket_message');
+    return;
+}
+
+sub _websocket_raw_config ($self) {
+    my $state = $self->_websocket_state;
+    return [ $state->{endpoint_type}, $state->{max_message_size} ];
+}
+
+sub _websocket_raw_native_ready ($self, $native) {
+    my $state = $self->_ensure_websocket_open($native);
+    return $state->{engine};
+}
+
+sub _ensure_websocket_open ($self, $native = undef) {
     my $state = $self->SUPER::data;
     return $state
         if ref($state) eq 'Linux::Event::WebSocket::_State'
@@ -74,9 +99,8 @@ sub _ensure_websocket_open ($self) {
     $state = $self->_websocket_state;
     return $state if $state->{open};
 
-    $state->{message_handler} = $state->{callbacks}{message}
-        // $self->can('websocket_message');
-    $self->_initialize_engine($state);
+    $self->_prepare_message_handler($state);
+    $self->_initialize_engine($state, $native);
     if (my $handshake = $state->{handshake}) {
         $state->{subprotocol} =
             Linux::Event::WebSocket::_Handshake->subprotocol($handshake);
@@ -105,11 +129,7 @@ sub send_text ($self, $payload) {
     croak 'send_text(): WebSocket connection is closing'
         if $state->{closing};
 
-    my $bytes = eval {
-        Linux::Event::WebSocket::_UTF8->encode($payload);
-    };
-    croak 'send_text(): payload contains invalid UTF-8' if $@;
-    return $state->{engine}->send_text($bytes);
+    return $state->{engine}->send_text($payload);
 }
 
 sub send_binary ($self, $payload) {
@@ -222,12 +242,6 @@ sub _websocket_engine_closing ($self) {
 
 sub _websocket_engine_close ($self, $code, $reason) {
     $self->_notify_websocket_close($code, $reason);
-    return;
-}
-
-sub on_data ($self, $bytes) {
-    my $state = $self->_ensure_websocket_open;
-    $state->{engine}->feed($bytes);
     return;
 }
 
