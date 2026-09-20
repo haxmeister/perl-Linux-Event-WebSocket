@@ -62,6 +62,21 @@ use Scalar::Util qw(refaddr);
         return;
     }
 
+    sub _websocket_engine_error ($self, $error) {
+        push @{$self->data->{errors}}, "$error";
+        return;
+    }
+
+    sub _websocket_engine_closing ($self) {
+        $self->data->{closing} = 1;
+        return;
+    }
+
+    sub _websocket_engine_close ($self, $code, $reason) {
+        $self->data->{close} = [ $code, $reason ];
+        return;
+    }
+
     sub _websocket_raw_complete ($self) {
         my $engine = $self->{raw_engine}
             or die "raw WebSocket engine was not attached\n";
@@ -156,5 +171,109 @@ ok(
 
 $stream->close if !$stream->is_closed;
 close $peer;
+
+socketpair(my $control_socket, my $control_peer, AF_UNIX, SOCK_STREAM, PF_UNSPEC)
+    or die "control socketpair: $!";
+
+my $control_loop = Linux::Event::Loop->new;
+my $control_state = {
+    events   => [],
+    errors   => [],
+    expected => 0,
+};
+
+my $control_stream = Linux::Event::WebSocket::_RawABITestConnection->new(
+    loop => $control_loop,
+    fh   => $control_socket,
+    data => $control_state,
+);
+
+my $server_output = Linux::Event::WebSocket::_Parser->new(
+    endpoint_type  => 'client',
+    max_frame_size => 1024,
+);
+my @control_frame;
+my $close_sent = 0;
+
+my $control_guard = Linux::Event::Kernel::Timer->new(
+    loop => $control_loop,
+    after => 2,
+    on_timer => sub ($timer) {
+        die "raw control-frame ABI test timed out\n";
+    },
+);
+
+my $peer_reader;
+$peer_reader = $control_loop->watch_fd(
+    fileno($control_peer),
+    fh => $control_peer,
+    read => sub ($watcher) {
+        my $read = sysread($control_peer, my $bytes, 4096);
+        die "control peer read: $!" if !defined $read;
+        return if !$read;
+
+        $server_output->feed($bytes);
+        while (my $frame = $server_output->next_frame) {
+            push @control_frame, $frame;
+
+            if ($frame->{type} eq 'pong' && !$close_sent) {
+                $close_sent = 1;
+                my $payload =
+                    Linux::Event::WebSocket::_Frame->close_payload(1000, 'done');
+                my $close = Linux::Event::WebSocket::_Frame->encode(
+                    close => $payload,
+                    masked   => 1,
+                    mask_key => "\x11\x12\x13\x14",
+                );
+                syswrite($control_peer, $close) == length($close)
+                    or die "control close write: $!";
+            }
+
+            if ($frame->{type} eq 'close') {
+                $control_guard->cancel;
+                $control_loop->stop;
+            }
+        }
+        return;
+    },
+);
+
+my $ping = Linux::Event::WebSocket::_Frame->encode(
+    ping => 'probe',
+    masked   => 1,
+    mask_key => "\x21\x22\x23\x24",
+);
+syswrite($control_peer, $ping) == length($ping)
+    or die "control ping write: $!";
+
+$control_loop->run;
+
+is_deeply(
+    $control_state->{errors},
+    [],
+    'raw control path reports no errors',
+);
+
+my ($pong) = grep { $_->{type} eq 'pong' } @control_frame;
+ok($pong, 'raw control path writes Pong');
+is($pong->{payload}, 'probe', 'raw Pong preserves Ping payload');
+
+my ($close_frame) = grep { $_->{type} eq 'close' } @control_frame;
+ok($close_frame, 'raw control path writes Close response');
+my ($close_code, $close_reason) =
+    Linux::Event::WebSocket::_Frame->parse_close_payload($close_frame->{payload});
+is($close_code, 1000, 'raw Close response preserves status code');
+is($close_reason, 'done', 'raw Close response preserves reason');
+
+ok($control_state->{closing}, 'raw Close enters WebSocket closing state');
+is_deeply(
+    $control_state->{close},
+    [ 1000, 'done' ],
+    'raw Close reaches normal Engine close lifecycle',
+);
+
+$peer_reader->cancel;
+$control_stream->close if !$control_stream->is_closed;
+close $control_peer;
 
 done_testing;
