@@ -2,47 +2,47 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `main`
-Prepared release version: `0.001`
-Release-prep merge: `e9d1f091c371d4e60e5dbb94aa4f33958b7b6477`
-No CPAN release has been made yet.
+Current work branch: `fix/cpantesters-close-copy-leak`
+Current CPAN release: `0.001`
+Prepared follow-up release: `0.002`
 
-## Release-ready state
+## Current state - CPAN Testers 0.001 follow-up
 
-Linux::Event::WebSocket 0.001 is prepared on main for its first CPAN release.
+Linux::Event::WebSocket 0.001 was published to CPAN on 2026-09-20.
 
-Release validation targets Linux::Event 0.116 and Linux::Event::HTTP 0.002.
-HTTP 0.002 owns native server-side HTTP input, so WebSocket no longer installs
-the obsolete server HTTP byte bridge. The WebSocket client keeps its temporary
-bridge because the HTTP client response parser remains Perl-based.
+CPAN Testers then exposed a native cleanup bug in the locally patched
+`bq_websocket` Close handling. The failing reports completed all assertions in
+`t/03-engine.t` and then aborted during object destruction with:
 
-Final release-prep validation on the exact release head passed:
+```text
+bqws_free_socket: Assertion 'ws->alloc.memory_used == 0' failed.
+```
 
-- GitHub Actions WebSocket tests run `35551728868`;
-- Perl 5.36: PASS;
-- Perl 5.44.0: PASS;
-- generated `Linux-Event-WebSocket-0.001.tar.gz`: PASS;
-- extracted archive rebuild/test: 12 files / 499 tests, PASS;
-- Autobahn run `35551728957`;
-- client conformance: 301 selected cases, 287 OK, 11 NON-STRICT,
-  3 INFORMATIONAL, zero conformance failures;
-- server conformance: same result;
-- close behavior in both directions: 298 OK, 3 INFORMATIONAL.
+The failing reports were on ANDK Debian 14 DEBUGGING/multiplicity Perl builds,
+including Perl 5.40.5, 5.44.0, and 5.45.1. Many ordinary and threaded Linux
+smokers passed, so this was not a general threaded-Perl or dependency failure.
 
-Release packaging includes the runtime modules, production tests, public docs,
-native source, and vendored bq source/license while excluding repository-only
-workflows, benchmarks, handoff notes, and Autobahn author tooling.
+Root cause: the local safe-Close-echo patch allocated an application-visible
+copy of every received Close before validating its payload. Rejected one-byte,
+invalid-code, or invalid-UTF8 Close frames freed the original message and
+returned while leaving the copy owned by the bq socket with no retained
+pointer. Destruction therefore found nonzero native allocation accounting.
 
-The public CPAN surface is explicit in META: the six documented public packages
-provide version 0.001 and private implementation/helper packages are no_index.
+The 0.002 fix:
 
-Remaining release sequencing:
+- validates the received Close before allocating the application-visible copy;
+- releases the original Close if copy allocation itself fails;
+- exposes the private bq allocation count to internal regression tests;
+- verifies rejected one-byte and invalid-UTF8 Close frames leave zero tracked
+  native heap allocation.
 
-1. publish Linux::Event::HTTP 0.002 and wait until a normal CPAN client can
-   resolve it;
-2. confirm Linux::Event 0.116 is likewise normally resolvable;
-3. build the 0.001 tarball from current main, upload it to CPAN, tag v0.001,
-   and create the GitHub release.
+Diagnostic reproduction also established that the published dependency stack
+is sound: Linux::Event 0.116 and Linux::Event::HTTP 0.002 passed the WebSocket
+suite on Perl 5.36, 5.38, 5.40, 5.42, and 5.44 in hosted CI.
+
+Fix validation on PR #21 includes the production suite and generated
+distribution archive. Autobahn client/server conformance must remain green
+before merging to main.
 
 ## Project boundary
 
