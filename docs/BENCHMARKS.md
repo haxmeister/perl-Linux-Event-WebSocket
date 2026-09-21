@@ -163,6 +163,67 @@ The diagnostic scripts are:
 The manual `WebSocket high-concurrency comparison` GitHub Actions workflow
 runs both diagnostics without lengthening normal CI.
 
+## Send-path turnaround isolation
+
+A follow-up diagnostic isolated the response path after the high-concurrency
+window-depth result. The server handled the same 64-byte application request at
+1000 concurrent connections using five response implementations:
+
+- the public `send_text()` API;
+- direct `_Engine->send_text()`;
+- direct native bq queueing with the normal end-of-consumer deferred flush;
+- native bq queueing followed by an immediate flush/write from inside the
+  message callback;
+- a preframed WebSocket acknowledgement written directly through
+  `Stream->write()`.
+
+Three samples were taken at window 1 and window 4. Median results were:
+
+| response path | window 1 | window 4 |
+| --- | ---: | ---: |
+| public send_text | 23.1k txn/s | 47.5k txn/s |
+| direct Engine | 23.3k | 49.5k |
+| native queue, deferred flush | 24.4k | 49.6k |
+| native queue, immediate flush/write | 23.1k | 38.0k |
+| preframed Stream write | 24.2k | 39.9k |
+
+The result rules out WebSocket frame construction and the public
+`Connection::send_text -> _Engine::send_text` method chain as the primary
+source of the window-1 gap. Bypassing both improves the one-outstanding-request
+case by only about 5%.
+
+More importantly, forcing an immediate write from inside each message callback
+reduces window-4 throughput by roughly 20%. The existing raw-consumer design is
+therefore doing useful work: all messages already available in one native input
+delivery queue their responses into bq, and the consumer flushes the aggregate
+wire output once after callback delivery. That coalescing should be preserved.
+
+Current Linux::Event `Stream->write()` already invokes native `_write()`
+immediately when the socket is writable. Diagnostic core counters showed no
+write EAGAINs and no retained pending output in this workload. The large
+window-1 versus window-4 difference is therefore primarily fixed per-turn
+overhead: native read/drain, raw-consumer entry, C-to-Perl application callback,
+WebSocket output production, and one native write submission for each
+one-at-a-time transaction. Windowed traffic amortizes those fixed costs across
+several messages and one deferred output flush.
+
+A separate experimental raw-write bridge (PR #17) showed that bypassing the
+public Perl `Stream->write()` wrapper after the deferred bq flush can improve
+the 1000-client window-1 median by about 13%, while retaining a small gain at
+window 4. That experiment deliberately reaches into private Linux::Event Stream
+state and is not suitable as a production WebSocket dependency.
+
+The architectural follow-up is therefore a generic Linux::Event native-consumer
+host output operation: a raw consumer should be able to submit an already-built
+wire buffer directly to the owning Stream's native output machinery while
+preserving normal buffering, backpressure, write-interest, error, TLS, and
+lifecycle semantics. Such a facility belongs in Linux::Event core rather than
+as a WebSocket-specific private-state bypass.
+
+The diagnostic is retained as
+`bench/compare/run-send-path-turnaround.sh` and the manual
+`WebSocket send-path turnaround diagnostic` workflow.
+
 ## Method
 
 Repository author benchmarks live under `bench/`.
