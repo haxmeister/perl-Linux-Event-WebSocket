@@ -1,7 +1,6 @@
 # Linux::Event::WebSocket Architecture
 
-This document describes the development architecture. The distribution has not
-yet had its first CPAN release, so public API details may still change.
+This document describes the architecture of the 0.001 release.
 
 ## Layer ownership
 
@@ -103,7 +102,7 @@ Binary data bypasses UTF-8 validation. Client masking keys come from Linux
 
 ### Raw native-input path
 
-Linux::Event 0.115's raw native-consumer ABI exposes a borrowed ordered-byte
+Linux::Event 0.116's raw native-consumer ABI exposes a borrowed ordered-byte
 input window before core creates a Perl read scalar. Linux::Event::WebSocket
 uses that facility as its established receive path without moving any
 WebSocket framing policy into Linux::Event core.
@@ -199,7 +198,7 @@ Protocol violations produce the applicable close status when possible:
 
 `Linux::Event::WebSocket::Connection::close()` intentionally means the RFC
 6455 close handshake. `abort()` is immediate transport termination.
-Linux::Event 0.115 supplies the matching core invariant that involuntary Stream
+Linux::Event 0.116 supplies the matching core invariant that involuntary Stream
 teardown bypasses a protocol subclass's public `close()`.
 
 ## Test and conformance policy
