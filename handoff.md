@@ -33,8 +33,8 @@ The 0.002 fix:
 - validates the received Close before allocating the application-visible copy;
 - releases the original Close if copy allocation itself fails;
 - exposes the private bq allocation count to internal regression tests;
-- verifies rejected one-byte and invalid-UTF8 Close frames leave zero tracked
-  native heap allocation.
+- verifies rejected one-byte, invalid-status, and invalid-UTF8 Close frames
+  leave zero tracked native heap allocation.
 
 Diagnostic reproduction also established that the published dependency stack
 is sound: Linux::Event 0.116 and Linux::Event::HTTP 0.002 passed the WebSocket
