@@ -10,15 +10,15 @@ No CPAN release has been made yet.
 
 Version 0.001 is being prepared as the first CPAN release.
 
-Release validation must use the declared/released dependency contract rather
-than moving dependency main branches. In particular, Linux::Event::HTTP 0.001
-is the supported opening-Upgrade API for this release. Linux::Event::HTTP main
-has since begun an unreleased native-input refactor that is not a compatibility
-target for WebSocket 0.001.
+Release validation targets Linux::Event::HTTP 0.002. HTTP 0.002 makes native
+server input the production contract and removes the old Server::Connection
+`on_data` input path, so WebSocket 0.001 has been adapted to let HTTP own the
+opening server-side native consumer. The WebSocket client retains its temporary
+bridge because the HTTP client response parser remains Perl-based.
 
 The release candidate:
 
-- requires Linux::Event 0.116 and Linux::Event::HTTP 0.001;
+- requires Linux::Event 0.116 and Linux::Event::HTTP 0.002;
 - carries stable public package version 0.001 across the main client/server
   entry points;
 - includes Changes and an explicit MANIFEST.SKIP;
@@ -196,14 +196,16 @@ Validation is complete against that core commit:
 Linux::Event 0.116 exposes a protocol-neutral raw native-consumer ABI and now
 supports safe provider replacement across `transition_to()`.
 
-The WebSocket distribution uses two consumers:
+The server opening handshake now uses Linux::Event::HTTP 0.002's native HTTP
+consumer directly. After the 101 handoff, Linux::Event replaces that HTTP
+consumer with the bq WebSocket raw consumer.
 
-1. The private HTTP handshake connection uses a small WebSocket-owned bridge
-   consumer. It materializes the borrowed native window and passes it to the
-   existing Linux::Event::HTTP `on_data` parser. It does not parse HTTP.
-2. After the 101 handoff, Linux::Event replaces that bridge with the bq
-   WebSocket raw consumer. Preserved post-101 bytes are re-driven through bq
-   after the live Stream has been reblessed to the WebSocket connection class.
+The client opening handshake still uses a small WebSocket-owned bridge into the
+HTTP client response parser. After a valid 101 response, Linux::Event replaces
+that bridge with the bq WebSocket raw consumer.
+
+In both directions preserved post-101 bytes are re-driven through bq after the
+live Stream has been reblessed to the WebSocket connection class.
 
 The established provider:
 
