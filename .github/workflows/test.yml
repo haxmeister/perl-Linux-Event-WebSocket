@@ -78,6 +78,17 @@ jobs:
             echo
           done
 
+          for guid in \
+            d1ccdc14-b5a4-11f1-89d4-c520752d9601 \
+            e1ede53e-b5a4-11f1-9119-a34717ca0d57 \
+            7752a344-b5a5-11f1-89b9-b8f010590d99
+          do
+            echo "===== report $guid ====="
+            curl -L --connect-timeout 10 --max-time 30 --silent --show-error \
+              "https://api.cpantesters.org/v3/report/$guid" | head -c 300000
+            echo
+          done
+
       - name: Build release archive
         shell: bash
         run: |
