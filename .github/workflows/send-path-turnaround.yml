@@ -1,14 +1,6 @@
 name: WebSocket send-path turnaround diagnostic
 
 on:
-  push:
-    branches: [ bench/send-path-turnaround ]
-    paths:
-      - '.github/workflows/send-path-turnaround.yml'
-      - 'bench/compare/**'
-      - 'WebSocket.xs'
-      - 'lib/Linux/Event/WebSocket/**'
-      - 'Makefile.PL'
   workflow_dispatch:
 
 concurrency:
