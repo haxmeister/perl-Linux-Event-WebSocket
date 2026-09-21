@@ -1,7 +1,6 @@
 # Linux::Event::WebSocket Architecture
 
-This document describes the development architecture. The distribution has not
-yet had its first CPAN release, so public API details may still change.
+This document describes the architecture of the 0.001 release.
 
 ## Layer ownership
 
@@ -53,17 +52,22 @@ opening exchange. WebSocket state is attached before the request is sent,
 because post-101 bytes may be delivered to the transitioned class before the
 public HTTP `on_upgrade` callback runs.
 
-The two private WebSocket HTTP-connection classes declare a small native
-handoff consumer. During the handshake it materializes the borrowed native
-window into the same byte string expected by the existing HTTP `on_data`
-implementation. It does not parse HTTP itself.
+Linux::Event::HTTP 0.002 owns server-side HTTP byte input natively, so the
+private WebSocket server handshake connection does not declare or override an
+HTTP input consumer. HTTP parses the opening request from the native ordered-byte
+buffer and Linux::Event `transition_to()` replaces the HTTP consumer with the
+WebSocket bq raw-input consumer after the validated 101 handoff.
 
-After the 101 handoff, Linux::Event `transition_to()` replaces that temporary
-consumer with the WebSocket bq raw-input consumer while preserving unread
-native bytes. The live object is reblessed before the replacement consumer can
-re-drive those preserved bytes. This lets the first WebSocket frame share the
-same transport read as the HTTP Upgrade without passing established WebSocket
-traffic through Perl `on_data`.
+The HTTP client response path remains Perl-based in 0.002. The private WebSocket
+client handshake connection therefore keeps a small temporary native bridge that
+materializes the borrowed native window and feeds the existing HTTP client
+parser. After a valid 101 response, `transition_to()` replaces that bridge
+with the WebSocket bq raw-input consumer while preserving unread bytes.
+
+In both directions the live object is reblessed before preserved post-HTTP
+bytes are re-driven, so the first WebSocket frame may share the same transport
+read as the HTTP Upgrade without established WebSocket traffic using Perl
+`on_data`.
 
 The native WebSocket engine is created with bq's handshake disabled. HTTP
 parsing and Upgrade validation therefore remain outside bq. Production test
@@ -103,7 +107,7 @@ Binary data bypasses UTF-8 validation. Client masking keys come from Linux
 
 ### Raw native-input path
 
-Linux::Event 0.115's raw native-consumer ABI exposes a borrowed ordered-byte
+Linux::Event 0.116's raw native-consumer ABI exposes a borrowed ordered-byte
 input window before core creates a Perl read scalar. Linux::Event::WebSocket
 uses that facility as its established receive path without moving any
 WebSocket framing policy into Linux::Event core.
@@ -199,7 +203,7 @@ Protocol violations produce the applicable close status when possible:
 
 `Linux::Event::WebSocket::Connection::close()` intentionally means the RFC
 6455 close handshake. `abort()` is immediate transport termination.
-Linux::Event 0.115 supplies the matching core invariant that involuntary Stream
+Linux::Event 0.116 supplies the matching core invariant that involuntary Stream
 teardown bypasses a protocol subclass's public `close()`.
 
 ## Test and conformance policy

@@ -35,7 +35,7 @@ workloads, and survived the full correctness gates.
 
 ## Raw native-input boundary
 
-Linux::Event 0.115 adds a raw native-consumer ABI that exposes the borrowed
+Linux::Event 0.116 adds a raw native-consumer ABI that exposes the borrowed
 ordered-byte input window before core materializes the read as a Perl SV.
 `bench/raw-input-boundary.pl` was used to compare that path against the
 previous `on_data -> _Engine::feed` receive boundary while keeping the same

@@ -31,14 +31,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install Linux::Event dependencies
+      - name: Install release dependency stack
         run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          git clone https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          git -C /tmp/perl-linux-event checkout 007db40e22374c6d7bf8e056b2d354681d20c852
           cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+
+          git clone https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          git -C /tmp/perl-Linux-Event-HTTP checkout 9d179aa78c0fe6cd10da0b6a7b5952c73aa525ba
           cpanm --notest /tmp/perl-Linux-Event-HTTP
+
           cpanm --installdeps .
 
       - name: Build distribution
@@ -66,14 +68,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install Linux::Event dependencies
+      - name: Install release dependency stack
         run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          git clone https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          git -C /tmp/perl-linux-event checkout 007db40e22374c6d7bf8e056b2d354681d20c852
           cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+
+          git clone https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          git -C /tmp/perl-Linux-Event-HTTP checkout 9d179aa78c0fe6cd10da0b6a7b5952c73aa525ba
           cpanm --notest /tmp/perl-Linux-Event-HTTP
+
           cpanm --installdeps .
 
       - name: Build release archive
@@ -88,9 +92,30 @@ jobs:
           tar -tzf "$archive" > /tmp/dist-files.txt
           prefix=$(head -n 1 /tmp/dist-files.txt | cut -d/ -f1)
 
-          for path in             WebSocket.xs             vendor/bq_websocket/LICENSE             vendor/bq_websocket/README.md             vendor/bq_websocket/bq_websocket.c             vendor/bq_websocket/bq_websocket.h
+          for path in \
+            Changes \
+            Makefile.PL \
+            README.md \
+            WebSocket.xs \
+            stream_consumer_abi.h \
+            vendor/bq_websocket/LICENSE \
+            vendor/bq_websocket/README.md \
+            vendor/bq_websocket/bq_websocket.c \
+            vendor/bq_websocket/bq_websocket.h
           do
             grep -qx "$prefix/$path" /tmp/dist-files.txt
+          done
+
+          for path in \
+            .github/workflows/test.yml \
+            handoff.md \
+            bench/compare/README.md \
+            xt/autobahn/check-report.pl
+          do
+            if grep -qx "$prefix/$path" /tmp/dist-files.txt; then
+              echo "repository-only file leaked into release archive: $path" >&2
+              exit 1
+            fi
           done
 
           mkdir /tmp/lews-disttest

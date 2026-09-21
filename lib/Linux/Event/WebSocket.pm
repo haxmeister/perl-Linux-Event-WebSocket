@@ -3,7 +3,7 @@ use v5.36;
 use strict;
 use warnings;
 
-our $VERSION = '0.001_003';
+our $VERSION = '0.001';
 
 1;
 
@@ -39,6 +39,6 @@ evolve without changing the public Linux::Event API.
 
 =head1 STATUS
 
-This is an early development version. Public API details are not yet frozen.
+Version 0.001 is the first CPAN release of Linux::Event::WebSocket.
 
 =cut
