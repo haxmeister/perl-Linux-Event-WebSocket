@@ -8,6 +8,8 @@ Revision history for Linux::Event::WebSocket
     - Support ws:// and wss:// transports.
     - Support text and binary messages, fragmentation, Ping/Pong, Close,
       subprotocol negotiation, and configurable message-size limits.
+    - Require Linux::Event::HTTP 0.002 and use its native server-input Upgrade
+      path instead of the obsolete WebSocket-owned server HTTP byte bridge.
     - Preserve the live Linux::Event Stream across HTTP Upgrade, including TLS,
       queued output, application state, and post-101 bytes read in the same
       transport operation.
