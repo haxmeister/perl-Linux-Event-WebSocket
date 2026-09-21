@@ -3,6 +3,8 @@ use v5.36;
 use strict;
 use warnings;
 
+our $VERSION = '0.001';
+
 use parent 'Linux::Event::WebSocket::Connection';
 
 1;
