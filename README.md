@@ -5,11 +5,11 @@ callback-first API.
 
 ## Status
 
-Development version: `0.001_002`.
+Release version: `0.001`.
 
-The distribution now has working `ws://` and `wss://` client/server paths and a
-real production test suite. It has not yet been released to CPAN and the public
-API is still allowed to change before the first release.
+The distribution provides working `ws://` and `wss://` client/server paths,
+a native RFC 6455 data engine, and a production test suite. Version 0.001 is the
+first CPAN release.
 
 The GitHub Actions test matrix targets Perl 5.36 and Perl 5.44.0.
 
