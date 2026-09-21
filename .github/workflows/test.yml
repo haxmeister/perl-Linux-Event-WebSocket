@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        perl: ['5.36', '5.44.0']
+        perl: ['5.36', '5.38', '5.40', '5.42', '5.44.0']
 
     steps:
       - name: Checkout
