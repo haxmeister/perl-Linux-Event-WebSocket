@@ -31,15 +31,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install Linux::Event dependencies
-        run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
-          cpanm --installdeps .
+      - name: Install declared CPAN dependencies
+        run: cpanm --installdeps .
 
       - name: Build distribution
         run: |
@@ -66,15 +59,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install Linux::Event dependencies
-        run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
-          cpanm --installdeps .
+      - name: Install declared CPAN dependencies
+        run: cpanm --installdeps .
 
       - name: Build release archive
         shell: bash
@@ -88,9 +74,30 @@ jobs:
           tar -tzf "$archive" > /tmp/dist-files.txt
           prefix=$(head -n 1 /tmp/dist-files.txt | cut -d/ -f1)
 
-          for path in             WebSocket.xs             vendor/bq_websocket/LICENSE             vendor/bq_websocket/README.md             vendor/bq_websocket/bq_websocket.c             vendor/bq_websocket/bq_websocket.h
+          for path in \
+            Changes \
+            Makefile.PL \
+            README.md \
+            WebSocket.xs \
+            stream_consumer_abi.h \
+            vendor/bq_websocket/LICENSE \
+            vendor/bq_websocket/README.md \
+            vendor/bq_websocket/bq_websocket.c \
+            vendor/bq_websocket/bq_websocket.h
           do
             grep -qx "$prefix/$path" /tmp/dist-files.txt
+          done
+
+          for path in \
+            .github/workflows/test.yml \
+            handoff.md \
+            bench/compare/README.md \
+            xt/autobahn/check-report.pl
+          do
+            if grep -qx "$prefix/$path" /tmp/dist-files.txt; then
+              echo "repository-only file leaked into release archive: $path" >&2
+              exit 1
+            fi
           done
 
           mkdir /tmp/lews-disttest
