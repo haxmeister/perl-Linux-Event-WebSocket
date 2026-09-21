@@ -31,16 +31,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install release dependency stack
+      - name: Install published CPAN dependency stack
         run: |
-          git clone https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          git -C /tmp/perl-linux-event checkout 007db40e22374c6d7bf8e056b2d354681d20c852
-          cpanm --notest /tmp/perl-linux-event
-
-          git clone https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          git -C /tmp/perl-Linux-Event-HTTP checkout 9d179aa78c0fe6cd10da0b6a7b5952c73aa525ba
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
-
           cpanm --installdeps .
 
       - name: Build distribution
@@ -68,16 +60,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install release dependency stack
+      - name: Install published CPAN dependency stack
         run: |
-          git clone https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          git -C /tmp/perl-linux-event checkout 007db40e22374c6d7bf8e056b2d354681d20c852
-          cpanm --notest /tmp/perl-linux-event
-
-          git clone https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          git -C /tmp/perl-Linux-Event-HTTP checkout 9d179aa78c0fe6cd10da0b6a7b5952c73aa525ba
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
-
           cpanm --installdeps .
 
       - name: Build release archive
