@@ -2,32 +2,47 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `release/0.001`
-Release candidate version: `0.001`
+Current work branch: `main`
+Prepared release version: `0.001`
+Release-prep merge: `e9d1f091c371d4e60e5dbb94aa4f33958b7b6477`
 No CPAN release has been made yet.
 
-## Release candidate state
+## Release-ready state
 
-Version 0.001 is being prepared as the first CPAN release.
+Linux::Event::WebSocket 0.001 is prepared on main for its first CPAN release.
 
-Release validation targets Linux::Event::HTTP 0.002. HTTP 0.002 makes native
-server input the production contract and removes the old Server::Connection
-`on_data` input path, so WebSocket 0.001 has been adapted to let HTTP own the
-opening server-side native consumer. The WebSocket client retains its temporary
+Release validation targets Linux::Event 0.116 and Linux::Event::HTTP 0.002.
+HTTP 0.002 owns native server-side HTTP input, so WebSocket no longer installs
+the obsolete server HTTP byte bridge. The WebSocket client keeps its temporary
 bridge because the HTTP client response parser remains Perl-based.
 
-The release candidate:
+Final release-prep validation on the exact release head passed:
 
-- requires Linux::Event 0.116 and Linux::Event::HTTP 0.002;
-- carries stable public package version 0.001 across the main client/server
-  entry points;
-- includes Changes and an explicit MANIFEST.SKIP;
-- excludes repository-only workflows, benchmarks, handoff notes, and Autobahn
-  author tooling from the CPAN archive;
-- validates normal tests and extracted-distribution tests against declared
-  CPAN prerequisites;
-- validates Autobahn client/server conformance against the same dependency
-  contract.
+- GitHub Actions WebSocket tests run `35551728868`;
+- Perl 5.36: PASS;
+- Perl 5.44.0: PASS;
+- generated `Linux-Event-WebSocket-0.001.tar.gz`: PASS;
+- extracted archive rebuild/test: 12 files / 499 tests, PASS;
+- Autobahn run `35551728957`;
+- client conformance: 301 selected cases, 287 OK, 11 NON-STRICT,
+  3 INFORMATIONAL, zero conformance failures;
+- server conformance: same result;
+- close behavior in both directions: 298 OK, 3 INFORMATIONAL.
+
+Release packaging includes the runtime modules, production tests, public docs,
+native source, and vendored bq source/license while excluding repository-only
+workflows, benchmarks, handoff notes, and Autobahn author tooling.
+
+The public CPAN surface is explicit in META: the six documented public packages
+provide version 0.001 and private implementation/helper packages are no_index.
+
+Remaining release sequencing:
+
+1. publish Linux::Event::HTTP 0.002 and wait until a normal CPAN client can
+   resolve it;
+2. confirm Linux::Event 0.116 is likewise normally resolvable;
+3. build the 0.001 tarball from current main, upload it to CPAN, tag v0.001,
+   and create the GitHub release.
 
 ## Project boundary
 
