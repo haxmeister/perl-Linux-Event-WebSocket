@@ -1,0 +1,65 @@
+name: WebSocket send-path turnaround diagnostic
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: websocket-send-path-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.44.0'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Install Linux::Event stack from main
+        run: |
+          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
+          cpanm --notest /tmp/perl-Uniform-HTTP
+          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
+          cpanm --notest /tmp/perl-linux-event
+          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
+          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --installdeps .
+          npm install --prefix bench/compare
+
+      - name: Build WebSocket
+        run: |
+          perl Makefile.PL
+          make
+          echo "PERL5LIB=$PWD/blib/lib:$PWD/blib/arch:${PERL5LIB:-}" >> "$GITHUB_ENV"
+
+      - name: Record versions
+        run: |
+          perl -MLinux::Event -e 'print "linux_event=$Linux::Event::VERSION\n"'
+          perl -Iblib/lib -MLinux::Event::WebSocket -e 'print "websocket=$Linux::Event::WebSocket::VERSION\n"'
+          git -C /tmp/perl-linux-event rev-parse HEAD | sed 's/^/linux_event_commit=/'
+
+      - name: Run send-path turnaround diagnostic
+        run: bash bench/compare/run-send-path-turnaround.sh send-path-turnaround.csv
+
+      - name: Show results
+        run: cat send-path-turnaround.csv
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: websocket-send-path-turnaround
+          path: send-path-turnaround.csv

@@ -2,7 +2,7 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `bench/high-concurrency-small-text`
+Current work branch: `bench/send-path-turnaround`
 Based on validated native-engine branch: `feature/bq-native-engine`
 Development version: `0.001_003`
 No CPAN release has been made.
@@ -253,6 +253,40 @@ turnaround cost before considering more protocol-parser optimization.
 The diagnostic tooling is retained under `bench/compare/` and is run manually
 through the `WebSocket high-concurrency comparison` workflow so normal CI is
 not lengthened.
+
+## Send-path turnaround conclusion
+
+The follow-up send-path isolation is complete against Linux::Event 0.116/main.
+
+At 1000 clients with 64-byte application requests, window-1 medians were about
+23.1k/s through public `send_text`, 23.3k/s through direct Engine send, 24.4k/s
+through direct native bq queueing with the normal deferred flush, and 24.2k/s
+with a preframed direct Stream write. The public WebSocket send layers therefore
+account for only a small fraction of the one-at-a-time gap.
+
+Forcing bq to flush and write immediately inside every message callback did not
+improve window 1 and reduced window-4 throughput to about 38.0k/s versus
+47.5-49.6k/s for the deferred paths. Preserve the current end-of-consumer
+deferred flush: it usefully coalesces responses when several messages are
+available in one input delivery.
+
+Read-only inspection of Linux::Event 0.116 confirms that public
+`Stream->write()` calls native `_write()` immediately. Existing diagnostic
+counters also showed no write EAGAINs and no retained pending output in this
+workload.
+
+PR #17's private raw-write bypass provides the remaining architectural clue:
+at 1000 clients it improved the window-1 median from about 24.3k/s to 27.4k/s
+while preserving a small window-4 gain. It does so by reaching into private
+Linux::Event Stream native state and therefore must not become the production
+WebSocket implementation.
+
+Next core-facing recommendation: evaluate an append-only native-consumer host
+ABI output operation that lets a consumer submit an already-built wire buffer
+directly to its owning Stream's native output path. It must retain normal
+buffering, backpressure, writable-interest, TLS, error, and lifecycle semantics.
+Do not implement that change from this repository without explicit core
+authorization.
 
 ## Core boundary
 
