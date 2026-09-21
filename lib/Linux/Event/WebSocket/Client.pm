@@ -13,7 +13,7 @@ use Linux::Event::WebSocket::Client::_HTTPConnection;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 
-our $VERSION = '0.001_001';
+our $VERSION = '0.001';
 
 my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
 
