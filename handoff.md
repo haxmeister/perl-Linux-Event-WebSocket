@@ -2,15 +2,16 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `fix/cpantesters-close-copy-leak`
+Current work branch: `main`
 Current CPAN release: `0.001`
 Prepared follow-up release: `0.002`
+0.002 fix merge: `b8d88587a919834cdc0c2d468d155a1f17137db1`
 
-## Current state - CPAN Testers 0.001 follow-up
+## Current state - 0.002 ready after CPAN Testers fix
 
 Linux::Event::WebSocket 0.001 was published to CPAN on 2026-09-20.
 
-CPAN Testers then exposed a native cleanup bug in the locally patched
+CPAN Testers exposed a native cleanup bug in the locally patched
 `bq_websocket` Close handling. The failing reports completed all assertions in
 `t/03-engine.t` and then aborted during object destruction with:
 
@@ -18,31 +19,33 @@ CPAN Testers then exposed a native cleanup bug in the locally patched
 bqws_free_socket: Assertion 'ws->alloc.memory_used == 0' failed.
 ```
 
-The failing reports were on ANDK Debian 14 DEBUGGING/multiplicity Perl builds,
-including Perl 5.40.5, 5.44.0, and 5.45.1. Many ordinary and threaded Linux
-smokers passed, so this was not a general threaded-Perl or dependency failure.
-
 Root cause: the local safe-Close-echo patch allocated an application-visible
-copy of every received Close before validating its payload. Rejected one-byte,
-invalid-code, or invalid-UTF8 Close frames freed the original message and
-returned while leaving the copy owned by the bq socket with no retained
-pointer. Destruction therefore found nonzero native allocation accounting.
+copy of a received Close before validating its payload. Rejected one-byte,
+invalid-status, or invalid-UTF8 Close frames could therefore leave that copy
+owned by the bq socket with no retained pointer.
 
-The 0.002 fix:
+The 0.002 fix is merged to main. It:
 
-- validates the received Close before allocating the application-visible copy;
+- validates a received Close before allocating the application-visible copy;
 - releases the original Close if copy allocation itself fails;
 - exposes the private bq allocation count to internal regression tests;
 - verifies rejected one-byte, invalid-status, and invalid-UTF8 Close frames
   leave zero tracked native heap allocation.
 
-Diagnostic reproduction also established that the published dependency stack
-is sound: Linux::Event 0.116 and Linux::Event::HTTP 0.002 passed the WebSocket
-suite on Perl 5.36, 5.38, 5.40, 5.42, and 5.44 in hosted CI.
+Final validation on the 0.002 PR head `424e84b897487640850ef38c63b98cd4acbbdc81`:
 
-Fix validation on PR #21 includes the production suite and generated
-distribution archive. Autobahn client/server conformance must remain green
-before merging to main.
+- WebSocket tests run `35639536238`: PASS;
+- Perl 5.36: PASS;
+- Perl 5.44.0: PASS;
+- generated distribution archive and extracted rebuild/test: PASS;
+- Autobahn conformance run `35639536168`: PASS;
+- implementation comparison run `35639536029`: PASS.
+
+A diagnostic matrix using the published Linux::Event 0.116 and
+Linux::Event::HTTP 0.002 dependencies also passed on Perl 5.36, 5.38, 5.40,
+5.42, and 5.44.
+
+0.002 is ready to build and upload to CPAN from current main.
 
 ## Project boundary
 
