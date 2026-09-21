@@ -2,10 +2,32 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `bench/send-path-turnaround`
-Based on validated native-engine branch: `feature/bq-native-engine`
-Development version: `0.001_003`
-No CPAN release has been made.
+Current work branch: `release/0.001`
+Release candidate version: `0.001`
+No CPAN release has been made yet.
+
+## Release candidate state
+
+Version 0.001 is being prepared as the first CPAN release.
+
+Release validation must use the declared/released dependency contract rather
+than moving dependency main branches. In particular, Linux::Event::HTTP 0.001
+is the supported opening-Upgrade API for this release. Linux::Event::HTTP main
+has since begun an unreleased native-input refactor that is not a compatibility
+target for WebSocket 0.001.
+
+The release candidate:
+
+- requires Linux::Event 0.116 and Linux::Event::HTTP 0.001;
+- carries stable public package version 0.001 across the main client/server
+  entry points;
+- includes Changes and an explicit MANIFEST.SKIP;
+- excludes repository-only workflows, benchmarks, handoff notes, and Autobahn
+  author tooling from the CPAN archive;
+- validates normal tests and extracted-distribution tests against declared
+  CPAN prerequisites;
+- validates Autobahn client/server conformance against the same dependency
+  contract.
 
 ## Project boundary
 
