@@ -9,7 +9,7 @@ use Linux::Event::HTTP::Server;
 use Linux::Event::WebSocket::Server::Connection;
 use Linux::Event::WebSocket::Server::_HTTPConnection;
 
-our $VERSION = '0.001_001';
+our $VERSION = '0.001';
 
 my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
 
