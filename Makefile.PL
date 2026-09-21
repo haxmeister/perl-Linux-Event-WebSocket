@@ -33,7 +33,7 @@ WriteMakefile(
     PREREQ_PM => {
         'Digest::SHA'         => 0,
         'Linux::Event'        => '0.116',
-        'Linux::Event::HTTP'  => '0.001',
+        'Linux::Event::HTTP'  => '0.002',
         'MIME::Base64'        => 0,
         'URI'                 => 0,
     },
