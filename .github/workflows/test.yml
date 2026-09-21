@@ -64,6 +64,20 @@ jobs:
         run: |
           cpanm --installdeps .
 
+      - name: Inspect CPAN Testers report data
+        shell: bash
+        run: |
+          set +e
+          for url in \
+            "https://api.cpantesters.org/v3/summary/Linux-Event-WebSocket/0.001" \
+            "https://api.cpantesters.org/v3/report?dist=Linux-Event-WebSocket&version=0.001" \
+            "https://api.cpantesters.org/v3/reports?dist=Linux-Event-WebSocket&version=0.001"
+          do
+            echo "===== $url ====="
+            curl -L --connect-timeout 10 --max-time 30 --silent --show-error "$url" | head -c 200000
+            echo
+          done
+
       - name: Build release archive
         shell: bash
         run: |
