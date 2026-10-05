@@ -106,7 +106,7 @@ sub snapshot_request ($class, $request) {
     );
     for my $name (qw(version scheme authority protocol)) {
         next if !$request->can($name);
-        my $value = $request->$name;
+        my $value = $request->$name();
         $option{$name} = $value if defined $value;
     }
 
@@ -123,7 +123,7 @@ sub snapshot_response ($class, $response) {
     );
     for my $name (qw(reason version)) {
         next if !$response->can($name);
-        my $value = $response->$name;
+        my $value = $response->$name();
         $option{$name} = $value if defined $value;
     }
 
