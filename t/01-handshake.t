@@ -33,8 +33,15 @@ my $request = Linux::Event::HTTP::Request->new(
     ],
 );
 
+my $request_snapshot =
+    Linux::Event::WebSocket::_Handshake->snapshot_request($request);
+isa_ok($request_snapshot, 'Uniform::HTTP::Request',
+    'transport request snapshots to canonical Uniform Request');
+is($request_snapshot->target, '/chat', 'request snapshot preserves target');
+ok(!$request_snapshot->is_mutable, 'request snapshot is read-only');
+
 my $server_handshake = Linux::Event::WebSocket::_Handshake->server_from_request(
-    $request,
+    $request_snapshot,
     subprotocols => [qw(superchat chat)],
 );
 my $response = Linux::Event::HTTP::Response->new(status => 200);
@@ -64,8 +71,12 @@ my ($client_handshake, $client_request) =
         headers      => [ [ Authorization => 'Bearer token' ] ],
     );
 
+isa_ok($client_request, 'Uniform::HTTP::Request',
+    'client handshake uses canonical Uniform Request');
 is($client_request->method, 'GET', 'client uses GET');
 is($client_request->target, '/chat?room=1', 'client keeps path and query');
+is($client_request->scheme, 'http', 'client records HTTP transport scheme');
+is($client_request->authority, 'example.com', 'client records request authority');
 is($client_request->version, '1.1', 'client uses HTTP/1.1');
 is($client_request->header('Host'), 'example.com', 'client sets Host');
 is($client_request->header('Upgrade'), 'websocket', 'client sets Upgrade');
@@ -103,9 +114,16 @@ my $client_response = Linux::Event::HTTP::Response->new(
     ],
 );
 
+my $response_snapshot =
+    Linux::Event::WebSocket::_Handshake->snapshot_response($client_response);
+isa_ok($response_snapshot, 'Uniform::HTTP::Response',
+    'transport response snapshots to canonical Uniform Response');
+is($response_snapshot->status, 101, 'response snapshot preserves status');
+ok(!$response_snapshot->is_mutable, 'response snapshot is read-only');
+
 Linux::Event::WebSocket::_Handshake->validate_client_response(
     $client_handshake,
-    $client_response,
+    $response_snapshot,
 );
 is(Linux::Event::WebSocket::_Handshake->subprotocol($client_handshake), 'chat',
     'client retains the selected subprotocol');
