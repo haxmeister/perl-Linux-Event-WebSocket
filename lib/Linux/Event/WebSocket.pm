@@ -25,7 +25,8 @@ support on top of Linux::Event.
 
 Linux::Event owns the live socket, TLS transport, ordered byte buffering,
 backpressure, and protocol transition. Linux::Event::HTTP owns the opening
-HTTP/1.1 Upgrade exchange. Private modules in this distribution own RFC 6455
+HTTP/1.1 wire exchange. Public handshake requests and responses are canonical
+L<Uniform::HTTP> objects. Private modules in this distribution own RFC 6455
 handshake validation, framing, masking, fragmentation, text validation, and
 control semantics.
 
