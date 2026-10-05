@@ -90,16 +90,21 @@ canonical Uniform request before WebSocket validation or `on_handshake`.
 Its canonical 101 response is copied into the current Linux::Event::HTTP
 transport response before the live handoff.
 
-Linux::Event::HTTP owns HTTP input in both directions. The private WebSocket
-handshake connection classes do not declare or override an HTTP input consumer.
-This lets the HTTP layer choose its own implementation: Linux::Event::HTTP
-0.002 uses its existing client Perl input path, while 0.003 and later can use
-the HTTP layer's native client consumer. The server path likewise remains owned
-by Linux::Event::HTTP.
+Linux::Event::HTTP owns HTTP parsing in both directions. The server path
+always inherits the HTTP layer's input consumer.
 
-After a validated 101 handoff, Linux::Event `transition_to()` replaces the
-HTTP input policy with the WebSocket bq raw-input consumer while preserving
-unread bytes. WebSocket therefore has no temporary HTTP byte bridge to maintain.
+The client has one compatibility boundary. Linux::Event::HTTP 0.002 exposes a
+Perl `on_data` parser and Linux::Event core cannot transition from a Stream
+with no native consumer directly to the WebSocket native consumer. When that
+parent `on_data` capability exists, the private WebSocket client class installs
+a small native bridge that feeds exactly that HTTP parser. Linux::Event::HTTP
+0.003 removes `on_data` and already declares its own native client consumer;
+in that case WebSocket declares no bridge and inherits the HTTP consumer.
+
+After a validated 101 handoff, Linux::Event `transition_to()` replaces whichever
+HTTP input consumer is active with the WebSocket bq raw-input consumer while
+preserving unread bytes. The selection is capability-based rather than tied to
+a version number.
 
 In both directions the live object is reblessed before preserved post-HTTP
 bytes are re-driven, so the first WebSocket frame may share the same transport
