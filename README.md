@@ -5,11 +5,10 @@ callback-first API.
 
 ## Status
 
-Release version: `0.001`.
+Release version: `0.002`.
 
 The distribution provides working `ws://` and `wss://` client/server paths,
-a native RFC 6455 data engine, and a production test suite. Version 0.001 is the
-first CPAN release.
+a native RFC 6455 data engine, and a production test suite.
 
 The GitHub Actions test matrix targets Perl 5.36 and Perl 5.44.0.
 
@@ -25,7 +24,7 @@ The GitHub Actions test matrix targets Perl 5.36 and Perl 5.44.0.
 - Graceful WebSocket close handshake with a configurable close timeout.
 - Hard transport abort when graceful close is not appropriate.
 - Subprotocol negotiation.
-- Access to the HTTP handshake request and response.
+- Canonical `Uniform::HTTP` 0.06 request and response objects for the opening handshake.
 - Configurable message-size protection, defaulting to 16 MiB.
 - Linux::Event Stream output buffering and backpressure.
 - Linux::Event TLS transport retained across the HTTP-to-WebSocket transition.
@@ -121,6 +120,11 @@ $ws->data;
 `close()` starts the WebSocket close handshake. `abort()` closes the underlying
 transport immediately.
 
+`handshake_request()` returns an exact, read-only
+`Uniform::HTTP::Request`. `handshake_response()` returns an exact, read-only
+`Uniform::HTTP::Response`. Linux::Event::HTTP transport message objects are a
+private implementation detail.
+
 ## Architecture
 
 Linux::Event::WebSocket deliberately composes the existing ecosystem instead of
@@ -133,6 +137,9 @@ Linux::Event
 Linux::Event::HTTP
     HTTP/1.1 opening Upgrade and live-stream handoff
         |
+Uniform::HTTP
+    canonical public handshake request/response
+        |
 Linux::Event::WebSocket
     WebSocket connection API, RFC 6455 framing, messages, masking,
     fragmentation, control semantics, and protocol policy
@@ -143,6 +150,12 @@ same live connection. The socket, TLS transport, queued output, application
 state, and already-read post-HTTP bytes stay attached.
 
 There is no second miniature HTTP parser in this distribution.
+
+The current Linux::Event integration uses RFC 6455 HTTP/1.1 Upgrade. The
+Unblock::HTTP2 and Unblock::HTTP3 engines also expose Extended CONNECT with
+`protocol => 'websocket'`, but using that path requires an HTTP/2 or HTTP/3
+stream transport/handoff integration. It is not implemented by this
+distribution today.
 
 ## Inheritance policy
 
