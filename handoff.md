@@ -28,7 +28,7 @@ The public WebSocket handshake boundary is being aligned now:
 - server `on_handshake` receives a frozen canonical Uniform Request;
 - established connections expose frozen canonical Uniform Request/Response
   objects through `handshake_request` and `handshake_response`;
-- private conversion keeps current Linux::Event::HTTP 0.002 transport behavior;
+- private message conversion keeps the Linux::Event::HTTP transport API out of the public WebSocket boundary;
 - `Uniform::HTTP 0.06` is a runtime prerequisite;
 - HTTP/2 and HTTP/3 Extended CONNECT are documented but not implemented here,
   because they require a stream transport/handoff integration rather than the
@@ -112,9 +112,11 @@ Linux::Event native input
     -> application callback
 ```
 
-The HTTP opening exchange uses a WebSocket-owned temporary native byte bridge
-into the existing Linux::Event::HTTP parser. Linux::Event then replaces that
-provider with the bq WebSocket consumer at the 101 transition while preserving
+The HTTP opening exchange is now fully owned by Linux::Event::HTTP. WebSocket
+does not declare a temporary HTTP native consumer. This keeps the handshake
+compatible with Linux::Event::HTTP 0.002's existing client input path and with
+0.003's native client consumer. Linux::Event replaces the HTTP input policy
+with the bq WebSocket consumer at the 101 transition while preserving
 post-Upgrade input.
 
 Inbound text is validated in XS with Perl's C UTF-8 API using the RFC 3629
@@ -248,9 +250,9 @@ The server opening handshake now uses Linux::Event::HTTP 0.002's native HTTP
 consumer directly. After the 101 handoff, Linux::Event replaces that HTTP
 consumer with the bq WebSocket raw consumer.
 
-The client opening handshake still uses a small WebSocket-owned bridge into the
-HTTP client response parser. After a valid 101 response, Linux::Event replaces
-that bridge with the bq WebSocket raw consumer.
+The client opening handshake no longer installs a WebSocket-owned bridge.
+Linux::Event::HTTP owns client response input until the valid 101 response, then
+Linux::Event replaces the HTTP input policy with the bq WebSocket raw consumer.
 
 In both directions preserved post-101 bytes are re-driven through bq after the
 live Stream has been reblessed to the WebSocket connection class.
