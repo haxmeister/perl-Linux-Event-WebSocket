@@ -405,6 +405,11 @@ class. Application WebSocket work should begin in C<on_open>.
 C<ws://> and C<wss://> are supported. C<wss://> uses Linux::Event TLS and keeps
 that transport attached across the HTTP-to-WebSocket transition.
 
+After the opening exchange, C<handshake_request> and C<handshake_response> on
+the established connection expose exact, read-only L<Uniform::HTTP::Request>
+and L<Uniform::HTTP::Response> objects. The Linux::Event::HTTP message classes
+used by the current wire adapter are private implementation details.
+
 =head1 METHODS
 
 =head2 connect(URL)
