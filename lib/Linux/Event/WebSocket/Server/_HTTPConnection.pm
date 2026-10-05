@@ -9,6 +9,7 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 
 use Linux::Event::Kernel::Timer;
+use Uniform::HTTP::Response;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 
@@ -107,13 +108,15 @@ sub _schedule_server_open ($self) {
 
 sub on_request ($self, $request, $response) {
     my $state = $self->_websocket_state;
+    my $public_request =
+        Linux::Event::WebSocket::_Handshake->snapshot_request($request);
 
     if (my $callback = $state->{on_handshake}) {
         my ($accepted, $ok, $error);
         {
             local $@;
             $ok = eval {
-                $accepted = $callback->($request);
+                $accepted = $callback->($public_request);
                 1;
             };
             $error = $@;
@@ -138,13 +141,31 @@ sub on_request ($self, $request, $response) {
         local $@;
         $ok = eval {
             $handshake = Linux::Event::WebSocket::_Handshake->server_from_request(
-                $request,
+                $public_request,
                 subprotocols => $state->{subprotocols},
+            );
+            my $public_response = Uniform::HTTP::Response->new(
+                status  => 101,
+                version => '1.1',
             );
             Linux::Event::WebSocket::_Handshake->apply_server_response(
                 $handshake,
-                $response,
+                $public_response,
             );
+
+            $response->status($public_response->status);
+            $response->reason($public_response->reason);
+            for my $index (0 .. $public_response->header_count - 1) {
+                $response->add_header(
+                    $public_response->header_name($index),
+                    $public_response->header_value($index),
+                );
+            }
+
+            $state->{response} =
+                Linux::Event::WebSocket::_Handshake->snapshot_response(
+                    $public_response,
+                );
             1;
         };
         $error = $@;
@@ -158,7 +179,7 @@ sub on_request ($self, $request, $response) {
     }
 
     $state->{handshake} = $handshake;
-    $state->{request} = $request;
+    $state->{request} = $public_request;
 
     my $target = $state->{connection_class};
     $self->transaction->upgrade($target);
