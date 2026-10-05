@@ -149,6 +149,11 @@ A successful HTTP Upgrade calls Linux::Event's in-place `transition_to()` on the
 same live connection. The socket, TLS transport, queued output, application
 state, and already-read post-HTTP bytes stay attached.
 
+Linux::Event::HTTP owns the opening input path. WebSocket does not install a
+temporary HTTP consumer of its own; after a valid 101 response, the connection
+switches directly from the HTTP layer's input policy to the WebSocket native
+consumer.
+
 There is no second miniature HTTP parser in this distribution.
 
 The current Linux::Event integration uses RFC 6455 HTTP/1.1 Upgrade. The
