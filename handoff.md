@@ -2,10 +2,40 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `main`
+Current work branch: `api-harmonization-uniform-http-0.06`
 Current CPAN release: `0.001`
 Prepared follow-up release: `0.002`
 0.002 fix merge: `b8d88587a919834cdc0c2d468d155a1f17137db1`
+
+## HTTP API harmonization work
+
+The current GitHub release tags of the shared HTTP family were reviewed before
+this work:
+
+- Unblock::HTTP1 0.10
+- Unblock::HTTP2 0.10
+- Unblock::HTTP3 0.10
+- Uniform::HTTP 0.06
+
+The Unblock engines now share canonical Uniform request/response objects and a
+common Transaction vocabulary. Linux::Event::WebSocket still uses
+Linux::Event::HTTP 0.002 for its live HTTP/1.1 Upgrade transport, so this branch
+does not replace that transport layer.
+
+The public WebSocket handshake boundary is being aligned now:
+
+- client handshake requests are canonical `Uniform::HTTP::Request` objects;
+- server `on_handshake` receives a frozen canonical Uniform Request;
+- established connections expose frozen canonical Uniform Request/Response
+  objects through `handshake_request` and `handshake_response`;
+- private conversion keeps current Linux::Event::HTTP 0.002 transport behavior;
+- `Uniform::HTTP 0.06` is a runtime prerequisite;
+- HTTP/2 and HTTP/3 Extended CONNECT are documented but not implemented here,
+  because they require a stream transport/handoff integration rather than the
+  current whole-socket HTTP/1.1 `transition_to()` model.
+
+Focused handshake and live client/server regression coverage has been added.
+Full CI validation is still required before this branch is merged.
 
 ## Current state - 0.002 ready after CPAN Testers fix
 
