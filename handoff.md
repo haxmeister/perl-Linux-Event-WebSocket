@@ -35,7 +35,7 @@ The public WebSocket handshake boundary is being aligned now:
   current whole-socket HTTP/1.1 `transition_to()` model.
 
 Focused handshake and live client/server regression coverage has been added.
-Full CI validation is still required before this branch is merged.
+Merge only after full CI validates both the released HTTP 0.002 path and the newer native-client HTTP path.
 
 ## Current state - 0.002 ready after CPAN Testers fix
 
@@ -112,12 +112,18 @@ Linux::Event native input
     -> application callback
 ```
 
-The HTTP opening exchange is now fully owned by Linux::Event::HTTP. WebSocket
-does not declare a temporary HTTP native consumer. This keeps the handshake
-compatible with Linux::Event::HTTP 0.002's existing client input path and with
-0.003's native client consumer. Linux::Event replaces the HTTP input policy
-with the bq WebSocket consumer at the 101 transition while preserving
-post-Upgrade input.
+Linux::Event::HTTP owns HTTP parsing for the opening exchange. The client
+input adapter is selected by capability:
+
+- when the parent HTTP Client::Connection exposes `on_data` (0.002), WebSocket
+  installs the existing small native bridge so core can replace a native
+  provider at the 101 transition;
+- when the parent has no `on_data` and supplies its own native consumer
+  (0.003), WebSocket declares no bridge and inherits the HTTP consumer.
+
+This is capability-based, not a version-number branch. Linux::Event replaces
+whichever HTTP consumer is active with the bq WebSocket consumer at the 101
+transition while preserving post-Upgrade input.
 
 Inbound text is validated in XS with Perl's C UTF-8 API using the RFC 3629
 boundary. Outbound `send_text` validation/encoding is also done in XS. Binary
@@ -250,9 +256,11 @@ The server opening handshake now uses Linux::Event::HTTP 0.002's native HTTP
 consumer directly. After the 101 handoff, Linux::Event replaces that HTTP
 consumer with the bq WebSocket raw consumer.
 
-The client opening handshake no longer installs a WebSocket-owned bridge.
-Linux::Event::HTTP owns client response input until the valid 101 response, then
-Linux::Event replaces the HTTP input policy with the bq WebSocket raw consumer.
+The client opening handshake uses the compatibility bridge only when the
+installed Linux::Event::HTTP Client::Connection still exposes the legacy
+`on_data` parser. New native-consumer HTTP clients are inherited directly.
+After a valid 101 response, Linux::Event replaces the active HTTP input consumer
+with the bq WebSocket raw consumer.
 
 In both directions preserved post-101 bytes are re-driven through bq after the
 live Stream has been reblessed to the WebSocket connection class.
