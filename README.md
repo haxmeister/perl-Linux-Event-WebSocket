@@ -149,10 +149,12 @@ A successful HTTP Upgrade calls Linux::Event's in-place `transition_to()` on the
 same live connection. The socket, TLS transport, queued output, application
 state, and already-read post-HTTP bytes stay attached.
 
-Linux::Event::HTTP owns the opening input path. WebSocket does not install a
-temporary HTTP consumer of its own; after a valid 101 response, the connection
-switches directly from the HTTP layer's input policy to the WebSocket native
-consumer.
+Linux::Event::HTTP owns HTTP parsing for the opening exchange. With current
+native-client HTTP versions, WebSocket inherits the HTTP input consumer
+directly. For the older 0.002 client API only, a private compatibility bridge
+feeds the parent's existing HTTP parser so Linux::Event can replace one native
+consumer with another at the 101 transition. The public WebSocket API is the
+same in either case.
 
 There is no second miniature HTTP parser in this distribution.
 
