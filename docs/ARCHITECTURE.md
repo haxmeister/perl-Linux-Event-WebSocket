@@ -90,17 +90,16 @@ canonical Uniform request before WebSocket validation or `on_handshake`.
 Its canonical 101 response is copied into the current Linux::Event::HTTP
 transport response before the live handoff.
 
-Linux::Event::HTTP 0.002 owns server-side HTTP byte input natively, so the
-private WebSocket server handshake connection does not declare or override an
-HTTP input consumer. HTTP parses the opening request from the native ordered-byte
-buffer and Linux::Event `transition_to()` replaces the HTTP consumer with the
-WebSocket bq raw-input consumer after the validated 101 handoff.
+Linux::Event::HTTP owns HTTP input in both directions. The private WebSocket
+handshake connection classes do not declare or override an HTTP input consumer.
+This lets the HTTP layer choose its own implementation: Linux::Event::HTTP
+0.002 uses its existing client Perl input path, while 0.003 and later can use
+the HTTP layer's native client consumer. The server path likewise remains owned
+by Linux::Event::HTTP.
 
-The HTTP client response path remains Perl-based in 0.002. The private WebSocket
-client handshake connection therefore keeps a small temporary native bridge that
-materializes the borrowed native window and feeds the existing HTTP client
-parser. After a valid 101 response, `transition_to()` replaces that bridge
-with the WebSocket bq raw-input consumer while preserving unread bytes.
+After a validated 101 handoff, Linux::Event `transition_to()` replaces the
+HTTP input policy with the WebSocket bq raw-input consumer while preserving
+unread bytes. WebSocket therefore has no temporary HTTP byte bridge to maintain.
 
 In both directions the live object is reblessed before preserved post-HTTP
 bytes are re-driven, so the first WebSocket frame may share the same transport
@@ -164,8 +163,8 @@ callback-capable input work.
 Linux::Event core remains protocol-neutral. Its responsibilities here are the
 generic raw-input ABI, safe provider replacement during `transition_to()`,
 preservation of unread native input, and correct reentrant terminal teardown.
-The HTTP bridge, bq parser, RFC policy, and WebSocket lifecycle all remain in
-this distribution.
+The HTTP integration, bq parser, RFC policy, and WebSocket lifecycle all remain
+in this distribution.
 
 
 The adapter compiles bq single-threaded because a connection is owned by one
