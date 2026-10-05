@@ -203,9 +203,9 @@ C<on_close> receives the connection, peer close code, and reason. C<on_error>
 receives the connection and an error. C<on_drain> follows Linux::Event output
 backpressure semantics.
 
-C<on_handshake> is optional and receives the parsed HTTP Request before
-WebSocket validation. Return true to continue or false to reject the Upgrade
-with HTTP 403.
+C<on_handshake> is optional and receives an exact, read-only
+L<Uniform::HTTP::Request> before WebSocket validation. Return true to continue
+or false to reject the Upgrade with HTTP 403.
 
 =head1 LIMITS
 
