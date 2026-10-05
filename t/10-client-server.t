@@ -31,6 +31,7 @@ my $server = Linux::Event::WebSocket::Server->new(
 
     on_handshake => sub ($request) {
         $state->{handshake_path} = $request->target;
+        $state->{handshake_request_class} = ref $request;
         return $request->target eq '/chat';
     },
 
@@ -40,6 +41,8 @@ my $server = Linux::Event::WebSocket::Server->new(
         $state->{server_protocol} = $ws->subprotocol;
         $state->{server_secure} = $ws->secure;
         $state->{server_request_target} = $ws->handshake_request->target;
+        $state->{server_request_class} = ref $ws->handshake_request;
+        $state->{server_response_class} = ref $ws->handshake_response;
     },
 
     on_message => sub ($ws, $payload, $type) {
@@ -77,6 +80,8 @@ my $client = Linux::Event::WebSocket::Client->new(
         $state->{client_protocol} = $ws->subprotocol;
         $state->{client_secure} = $ws->secure;
         $state->{client_response_status} = $ws->handshake_response->status;
+        $state->{client_request_class} = ref $ws->handshake_request;
+        $state->{client_response_class} = ref $ws->handshake_response;
         $state->{open_ref} = refaddr($ws);
         $ws->send_text('hello');
     },
@@ -109,6 +114,8 @@ $loop->run;
 
 is_deeply($state->{errors}, [], 'client and server report no errors');
 is($state->{handshake_path}, '/chat', 'server handshake callback sees request target');
+is($state->{handshake_request_class}, 'Uniform::HTTP::Request',
+    'server handshake callback receives canonical Uniform Request');
 is($state->{server_open}, 1, 'server opens one WebSocket connection');
 is($state->{client_open}, 1, 'client opens one WebSocket connection');
 is($state->{server_class}, 'Linux::Event::WebSocket::Server::Connection',
@@ -123,8 +130,16 @@ ok(!$state->{server_secure}, 'plain server connection reports non-TLS transport'
 ok(!$state->{client_secure}, 'plain client connection reports non-TLS transport');
 is($state->{server_request_target}, '/chat',
     'server connection retains handshake Request');
+is($state->{server_request_class}, 'Uniform::HTTP::Request',
+    'server connection exposes canonical Uniform Request');
+is($state->{server_response_class}, 'Uniform::HTTP::Response',
+    'server connection exposes canonical Uniform Response');
+is($state->{client_request_class}, 'Uniform::HTTP::Request',
+    'client connection exposes canonical Uniform Request');
 is($state->{client_response_status}, 101,
     'client connection retains validated handshake Response');
+is($state->{client_response_class}, 'Uniform::HTTP::Response',
+    'client connection exposes canonical Uniform Response');
 is_deeply($state->{server_message}, [ text => 'hello' ],
     'server receives decoded text message');
 is_deeply($state->{client_message}, [ text => 'echo:hello' ],
