@@ -1,6 +1,6 @@
 # Linux::Event::WebSocket Architecture
 
-This document describes the architecture of the 0.001 release.
+This document describes the current architecture.
 
 ## Layer ownership
 
@@ -8,8 +8,13 @@ This document describes the architecture of the 0.001 release.
 buffering, backpressure, lifecycle, timers, and in-place `transition_to()`
 operations.
 
-`Linux::Event::HTTP` owns the opening HTTP/1.1 request/response exchange and
-preserves bytes read after the Upgrade headers during the protocol transition.
+`Linux::Event::HTTP` owns the opening HTTP/1.1 wire exchange and preserves
+bytes read after the Upgrade headers during the protocol transition.
+
+`Uniform::HTTP` 0.06 is the public handshake message boundary.
+`handshake_request`, `handshake_response`, and the server `on_handshake`
+callback use exact canonical Uniform request/response objects. The current
+Linux::Event::HTTP request/response classes remain private transport details.
 
 `Linux::Event::WebSocket` owns the public connection API, Upgrade policy,
 RFC 6455 data semantics, text policy, control behavior, and graceful close
@@ -41,6 +46,31 @@ Linux::Event::WebSocket::Server::Connection
 There are no roles, mixins, multiple-inheritance trees, or injected methods in
 the connection design.
 
+## HTTP family alignment
+
+The current released HTTP engine family was reviewed at these release
+boundaries:
+
+- Unblock::HTTP1 0.10
+- Unblock::HTTP2 0.10
+- Unblock::HTTP3 0.10
+- Uniform::HTTP 0.06
+
+The three Unblock engines now share the application vocabulary
+`Client->new`, `Server->new`, `request`, `respond`, `write`, `end`,
+and `send_informational`, and all use canonical Uniform messages.
+
+That common message model is relevant here, so WebSocket exposes canonical
+Uniform handshake objects. The transaction vocabulary does not need a
+WebSocket compatibility layer because this distribution does not directly
+drive an Unblock HTTP engine yet.
+
+HTTP/2 and HTTP/3 expose WebSocket-capable Extended CONNECT metadata through a
+Uniform request with `protocol => 'websocket'`. That is not interchangeable
+with the current HTTP/1.1 socket Upgrade. Supporting it here will require a
+stream-oriented transport/handoff adapter for an HTTP/2 or HTTP/3 transaction,
+rather than reblessing the whole socket.
+
 ## HTTP Upgrade handoff
 
 The high-level server composes `Linux::Event::HTTP::Server`. Accepted streams
@@ -48,21 +78,33 @@ start as HTTP connections and transition to the configured WebSocket connection
 class after a valid handshake.
 
 The high-level client uses `Linux::Event::HTTP::Client::Connection` for the
-opening exchange. WebSocket state is attached before the request is sent,
-because post-101 bytes may be delivered to the transitioned class before the
-public HTTP `on_upgrade` callback runs.
+opening exchange. WebSocket builds the public request as a canonical
+`Uniform::HTTP::Request`, converts it privately to the current
+Linux::Event::HTTP request type for transport, and snapshots the received
+response back to a canonical `Uniform::HTTP::Response`. WebSocket state is
+attached before the request is sent, because post-101 bytes may be delivered
+to the transitioned class before the public HTTP `on_upgrade` callback runs.
 
-Linux::Event::HTTP 0.002 owns server-side HTTP byte input natively, so the
-private WebSocket server handshake connection does not declare or override an
-HTTP input consumer. HTTP parses the opening request from the native ordered-byte
-buffer and Linux::Event `transition_to()` replaces the HTTP consumer with the
-WebSocket bq raw-input consumer after the validated 101 handoff.
+The server similarly snapshots the parsed transport request to a frozen
+canonical Uniform request before WebSocket validation or `on_handshake`.
+Its canonical 101 response is copied into the current Linux::Event::HTTP
+transport response before the live handoff.
 
-The HTTP client response path remains Perl-based in 0.002. The private WebSocket
-client handshake connection therefore keeps a small temporary native bridge that
-materializes the borrowed native window and feeds the existing HTTP client
-parser. After a valid 101 response, `transition_to()` replaces that bridge
-with the WebSocket bq raw-input consumer while preserving unread bytes.
+Linux::Event::HTTP owns HTTP parsing in both directions. The server path
+always inherits the HTTP layer's input consumer.
+
+The client has one compatibility boundary. Linux::Event::HTTP 0.002 exposes a
+Perl `on_data` parser and Linux::Event core cannot transition from a Stream
+with no native consumer directly to the WebSocket native consumer. When that
+parent `on_data` capability exists, the private WebSocket client class installs
+a small native bridge that feeds exactly that HTTP parser. Linux::Event::HTTP
+0.003 removes `on_data` and already declares its own native client consumer;
+in that case WebSocket declares no bridge and inherits the HTTP consumer.
+
+After a validated 101 handoff, Linux::Event `transition_to()` replaces whichever
+HTTP input consumer is active with the WebSocket bq raw-input consumer while
+preserving unread bytes. The selection is capability-based rather than tied to
+a version number.
 
 In both directions the live object is reblessed before preserved post-HTTP
 bytes are re-driven, so the first WebSocket frame may share the same transport
@@ -126,8 +168,8 @@ callback-capable input work.
 Linux::Event core remains protocol-neutral. Its responsibilities here are the
 generic raw-input ABI, safe provider replacement during `transition_to()`,
 preservation of unread native input, and correct reentrant terminal teardown.
-The HTTP bridge, bq parser, RFC policy, and WebSocket lifecycle all remain in
-this distribution.
+The HTTP integration, bq parser, RFC policy, and WebSocket lifecycle all remain
+in this distribution.
 
 
 The adapter compiles bq single-threaded because a connection is owned by one

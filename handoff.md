@@ -2,10 +2,40 @@
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
 Integration target: `main`
-Current work branch: `main`
+Current work branch: `api-harmonization-uniform-http-0.06`
 Current CPAN release: `0.001`
 Prepared follow-up release: `0.002`
 0.002 fix merge: `b8d88587a919834cdc0c2d468d155a1f17137db1`
+
+## HTTP API harmonization work
+
+The current GitHub release tags of the shared HTTP family were reviewed before
+this work:
+
+- Unblock::HTTP1 0.10
+- Unblock::HTTP2 0.10
+- Unblock::HTTP3 0.10
+- Uniform::HTTP 0.06
+
+The Unblock engines now share canonical Uniform request/response objects and a
+common Transaction vocabulary. Linux::Event::WebSocket still uses
+Linux::Event::HTTP 0.002 for its live HTTP/1.1 Upgrade transport, so this branch
+does not replace that transport layer.
+
+The public WebSocket handshake boundary is being aligned now:
+
+- client handshake requests are canonical `Uniform::HTTP::Request` objects;
+- server `on_handshake` receives a frozen canonical Uniform Request;
+- established connections expose frozen canonical Uniform Request/Response
+  objects through `handshake_request` and `handshake_response`;
+- private message conversion keeps the Linux::Event::HTTP transport API out of the public WebSocket boundary;
+- `Uniform::HTTP 0.06` is a runtime prerequisite;
+- HTTP/2 and HTTP/3 Extended CONNECT are documented but not implemented here,
+  because they require a stream transport/handoff integration rather than the
+  current whole-socket HTTP/1.1 `transition_to()` model.
+
+Focused handshake and live client/server regression coverage has been added.
+Merge only after full CI validates both the released HTTP 0.002 path and the newer native-client HTTP path.
 
 ## Current state - 0.002 ready after CPAN Testers fix
 
@@ -82,10 +112,18 @@ Linux::Event native input
     -> application callback
 ```
 
-The HTTP opening exchange uses a WebSocket-owned temporary native byte bridge
-into the existing Linux::Event::HTTP parser. Linux::Event then replaces that
-provider with the bq WebSocket consumer at the 101 transition while preserving
-post-Upgrade input.
+Linux::Event::HTTP owns HTTP parsing for the opening exchange. The client
+input adapter is selected by capability:
+
+- when the parent HTTP Client::Connection exposes `on_data` (0.002), WebSocket
+  installs the existing small native bridge so core can replace a native
+  provider at the 101 transition;
+- when the parent has no `on_data` and supplies its own native consumer
+  (0.003), WebSocket declares no bridge and inherits the HTTP consumer.
+
+This is capability-based, not a version-number branch. Linux::Event replaces
+whichever HTTP consumer is active with the bq WebSocket consumer at the 101
+transition while preserving post-Upgrade input.
 
 Inbound text is validated in XS with Perl's C UTF-8 API using the RFC 3629
 boundary. Outbound `send_text` validation/encoding is also done in XS. Binary
@@ -218,9 +256,11 @@ The server opening handshake now uses Linux::Event::HTTP 0.002's native HTTP
 consumer directly. After the 101 handoff, Linux::Event replaces that HTTP
 consumer with the bq WebSocket raw consumer.
 
-The client opening handshake still uses a small WebSocket-owned bridge into the
-HTTP client response parser. After a valid 101 response, Linux::Event replaces
-that bridge with the bq WebSocket raw consumer.
+The client opening handshake uses the compatibility bridge only when the
+installed Linux::Event::HTTP Client::Connection still exposes the legacy
+`on_data` parser. New native-consumer HTTP clients are inherited directly.
+After a valid 101 response, Linux::Event replaces the active HTTP input consumer
+with the bq WebSocket raw consumer.
 
 In both directions preserved post-101 bytes are re-driven through bq after the
 live Stream has been reblessed to the WebSocket connection class.

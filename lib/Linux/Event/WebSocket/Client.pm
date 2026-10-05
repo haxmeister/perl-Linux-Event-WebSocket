@@ -197,6 +197,23 @@ sub _destination ($url) {
     };
 }
 
+sub _http1_transport_request ($request) {
+    my @headers;
+    for my $index (0 .. $request->header_count - 1) {
+        push @headers, [
+            $request->header_name($index),
+            $request->header_value($index),
+        ];
+    }
+
+    return Linux::Event::HTTP::Request->new(
+        method  => $request->method,
+        target  => $request->target,
+        version => $request->version // '1.1',
+        headers => \@headers,
+    );
+}
+
 sub _report_error ($state, $connection, $error) {
     my $message = "$error";
     $message =~ s/\s+\z//;
@@ -218,6 +235,9 @@ sub connect ($self, $url) {
         headers      => $self->{headers},
         host_header  => $destination->{host_header},
     );
+    my $http_request = _http1_transport_request($request);
+    my $public_request =
+        Linux::Event::WebSocket::_Handshake->snapshot_request($request);
 
     my $state = Linux::Event::WebSocket::_State->new(
         endpoint_type    => 'client',
@@ -225,7 +245,7 @@ sub connect ($self, $url) {
         subprotocols     => $self->{subprotocols},
         data             => $self->{data},
         handshake        => $handshake,
-        request          => $request,
+        request          => $public_request,
         secure           => $destination->{secure},
         url              => "$url",
         close_timeout    => $self->{close_timeout},
@@ -257,15 +277,17 @@ sub connect ($self, $url) {
     $self->{url} = "$url";
 
     $connection->request(
-        $request,
+        $http_request,
         upgrade_to => $self->{connection_class},
 
         on_response => sub ($transaction, $response) {
-            $state->{response} = $response;
+            my $public_response =
+                Linux::Event::WebSocket::_Handshake->snapshot_response($response);
+            $state->{response} = $public_response;
             my $ok = eval {
                 Linux::Event::WebSocket::_Handshake->validate_client_response(
                     $handshake,
-                    $response,
+                    $public_response,
                 );
                 1;
             };
@@ -277,7 +299,8 @@ sub connect ($self, $url) {
         },
 
         on_upgrade => sub ($transaction, $response, $upgraded) {
-            $state->{response} = $response;
+            $state->{response} //=
+                Linux::Event::WebSocket::_Handshake->snapshot_response($response);
             $upgraded->_ensure_websocket_open;
         },
 
@@ -381,6 +404,11 @@ class. Application WebSocket work should begin in C<on_open>.
 
 C<ws://> and C<wss://> are supported. C<wss://> uses Linux::Event TLS and keeps
 that transport attached across the HTTP-to-WebSocket transition.
+
+After the opening exchange, C<handshake_request> and C<handshake_response> on
+the established connection expose exact, read-only L<Uniform::HTTP::Request>
+and L<Uniform::HTTP::Response> objects. The Linux::Event::HTTP message classes
+used by the current wire adapter are private implementation details.
 
 =head1 METHODS
 

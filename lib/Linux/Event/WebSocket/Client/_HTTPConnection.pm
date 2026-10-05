@@ -11,19 +11,25 @@ use Scalar::Util qw(blessed);
 use Linux::Event::Framer ();
 use Linux::Event::WebSocket::_BQ ();
 
+my $HTTP_ON_DATA = Linux::Event::HTTP::Client::Connection->can('on_data');
+
 sub can ($class, $name) {
-    return undef if $name eq 'on_data';
+    return undef if $name eq 'on_data' && $HTTP_ON_DATA;
     return UNIVERSAL::can($class, $name);
 }
 
 sub _websocket_http_input ($self, $bytes) {
-    return Linux::Event::HTTP::Client::Connection::on_data($self, $bytes);
+    croak 'Linux::Event::HTTP client input callback is unavailable'
+        if !$HTTP_ON_DATA;
+    return $HTTP_ON_DATA->($self, $bytes);
 }
 
-Linux::Event::Framer->declare_native_consumer(
-    __PACKAGE__,
-    Linux::Event::WebSocket::_BQ->http_bridge_consumer_definition,
-);
+if ($HTTP_ON_DATA) {
+    Linux::Event::Framer->declare_native_consumer(
+        __PACKAGE__,
+        Linux::Event::WebSocket::_BQ->http_bridge_consumer_definition,
+    );
+}
 
 sub _websocket_state ($self) {
     my $state = $self->SUPER::data;

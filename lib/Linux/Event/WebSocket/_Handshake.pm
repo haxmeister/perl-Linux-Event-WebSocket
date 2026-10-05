@@ -8,7 +8,8 @@ use Digest::SHA qw(sha1);
 use MIME::Base64 qw(decode_base64 encode_base64);
 use URI ();
 
-use Linux::Event::HTTP::Request;
+use Uniform::HTTP::Request;
+use Uniform::HTTP::Response;
 use Linux::Event::WebSocket::_Random;
 
 my $GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -81,6 +82,52 @@ sub _checked_subprotocols ($where, $subprotocols) {
         push @copy, "$token";
     }
     return \@copy;
+}
+
+sub _header_pairs ($message) {
+    my @headers;
+    for my $index (0 .. $message->header_count - 1) {
+        push @headers, [
+            $message->header_name($index),
+            $message->header_value($index),
+        ];
+    }
+    return \@headers;
+}
+
+sub snapshot_request ($class, $request) {
+    croak 'snapshot_request(): request object is required'
+        if !defined($request) || !ref($request);
+
+    my %option = (
+        method  => $request->method,
+        target  => $request->target,
+        headers => _header_pairs($request),
+    );
+    for my $name (qw(version scheme authority protocol)) {
+        next if !$request->can($name);
+        my $value = $request->$name();
+        $option{$name} = $value if defined $value;
+    }
+
+    return Uniform::HTTP::Request->new(%option)->freeze;
+}
+
+sub snapshot_response ($class, $response) {
+    croak 'snapshot_response(): response object is required'
+        if !defined($response) || !ref($response);
+
+    my %option = (
+        status  => $response->status,
+        headers => _header_pairs($response),
+    );
+    for my $name (qw(reason version)) {
+        next if !$response->can($name);
+        my $value = $response->$name();
+        $option{$name} = $value if defined $value;
+    }
+
+    return Uniform::HTTP::Response->new(%option)->freeze;
 }
 
 sub server_from_request ($class, $request, %option) {
@@ -221,11 +268,14 @@ sub client_request ($class, $url, %option) {
     push @http_headers, [ Origin => "$origin" ] if defined $origin;
     push @http_headers, @extra;
 
-    my $request = Linux::Event::HTTP::Request->new(
-        method  => 'GET',
-        target  => $target,
-        version => '1.1',
-        headers => \@http_headers,
+    my $http_scheme = lc($uri->scheme // '') eq 'wss' ? 'https' : 'http';
+    my $request = Uniform::HTTP::Request->new(
+        method    => 'GET',
+        target    => $target,
+        scheme    => $http_scheme,
+        authority => "$host_header",
+        version   => '1.1',
+        headers   => \@http_headers,
     );
 
     my $handshake = bless {
