@@ -2,12 +2,6 @@ name: WebSocket hot-path profile
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/profile.yml'
-      - 'lib/Linux/Event/WebSocket/**'
-      - 'bench/compare/clients/linux-event.pl'
 
 concurrency:
   group: websocket-profile-${{ github.ref }}
@@ -40,10 +34,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
           cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --notest 'Linux::Event@0.117' 'Uniform::HTTP@0.06' 'Unblock::HTTP1@0.13'
           cpanm --installdeps .
           cpanm --notest Devel::NYTProf
           npm install --prefix bench/compare
