@@ -1,3 +1,60 @@
+# ACTIVE 0.003 / HTTP 0.004 COMPATIBILITY HANDOFF — 2026-10-27
+
+User requires the published Linux::Event::WebSocket to remain functional
+at the same time as the rebuilt Linux::Event::HTTP 0.004. Users should
+have an easy choice of entry point, not learn internal engine history.
+
+Working WebSocket branch: feature/http-004-compat
+GitHub pull request: https://github.com/haxmeister/perl-Linux-Event-WebSocket/pull/23
+WebSocket main was NOT modified, tagged or released; explicit
+maintainer authorization is required for merging/publishing.
+HTTP 0.004 was previously approved and prepared on main; new HTTP
+documentation explains the coordinated release order. No HTTP
+runtime code, Unblock libraries, Uniform or Linux::Event core changed.
+
+User-facing rule:
+- Dedicated WebSocket client or server: Linux::Event::WebSocket.
+- Existing HTTP server/client needing WebSocket: Linux::Event::HTTP's
+  on_websocket/connect_websocket. Neither exposes a framing-engine choice.
+- Different private framing engines currently remain behind these two
+  entry points; do not open another engine-consolidation project for
+  this release. Core remains the long-term development priority.
+
+Implementation: standalone Unblock::HTTP1 0.13 now handles the opening
+handshake on the SAME Linux::Event Stream, canonical Uniform::HTTP 0.06
+messages and the pre-existing native HTTP-byte consumer bridge permit
+safe in-place transition to bq WebSocket XS consumer. Both directions
+preserve same-read protocol tail and client object identity. Original
+WebSocket callback-first API remains. WebSocket native bq framing engine
+and RFC validation remain untouched. No Linux::Event::HTTP runtime
+dependency exists, so WebSocket 0.003 can ship before HTTP 0.004.
+Server->http_server remains as legacy accessor but now returns Listener,
+not HTTP::Server; prefer ->listener.
+
+Release prep: VERSION 0.003 in all six indexed public modules; Makefile.PL
+runtime prereqs Linux::Event 0.117, Unblock::HTTP1 0.13,
+Uniform::HTTP 0.06, no Linux::Event::HTTP prerequisite. Changes,
+README, docs/ARCHITECTURE.md and docs/RELEASE-0.003.md updated.
+Feature CI installs root HTTP 0.004 source at
+ee962658dc2c2129d873f9805b790c56a6a6a89e for real coexistence.
+Existing test suite, native/Perl handshake and frame exchange, TLS,
+same-read Upgrade, close lifecycle and source archive all pass.
+
+CI CONFIRMED PASS:
+- Perl 5.36, Perl 5.44 and build-from-dist tests:
+  https://github.com/haxmeister/perl-Linux-Event-WebSocket/actions/runs/40623140163
+  all three jobs successful.
+- Autobahn client and server conformance:
+  https://github.com/haxmeister/perl-Linux-Event-WebSocket/actions/runs/40622913178
+  both successful.
+
+Publish in order:
+1. Merge/prepare and publish WebSocket 0.003 (on GitHub AND CPAN).
+2. Then publish HTTP 0.004. Never publish HTTP before compatible WebSocket.
+No more protocol optimization rounds or changes to public HTTP APIs.
+
+---
+
 # Linux::Event::WebSocket handoff
 
 Repository: `haxmeister/perl-Linux-Event-WebSocket`
