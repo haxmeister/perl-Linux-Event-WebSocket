@@ -12,7 +12,7 @@ use Linux::Event::WebSocket::Client::_HTTPConnection;
 use Linux::Event::WebSocket::_Handshake;
 use Linux::Event::WebSocket::_State;
 
-our $VERSION = '0.001';
+our $VERSION = '0.003';
 
 my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
 
@@ -338,7 +338,8 @@ Linux::Event::WebSocket::Client - callback-first WebSocket client
 
 =head1 DESCRIPTION
 
-The Client uses Linux::Event::HTTP only for the opening HTTP/1.1 Upgrade. The
+The Client uses Unblock::HTTP1 for the opening HTTP/1.1 Upgrade, without
+depending on Linux::Event::HTTP internals. The
 same live connection object is then transitioned in place to
 L<Linux::Event::WebSocket::Client::Connection>. The private handshake engine
 validates WebSocket-specific response fields, including
