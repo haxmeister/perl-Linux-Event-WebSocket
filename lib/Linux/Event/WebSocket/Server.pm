@@ -127,6 +127,10 @@ sub new ($class, %option) {
     }, $class;
 }
 
+# Retain the old convenience accessor for source compatibility. With
+# standalone Unblock::HTTP1 owning only the opening handshake there is no
+# longer an HTTP Server object; listener() is the clear accessor.
+sub http_server      ($self) { $self->{listener} }
 sub listener         ($self) { $self->{listener} }
 sub connection_class ($self) { $self->{connection_class} }
 sub data             ($self) { $self->{data} }
