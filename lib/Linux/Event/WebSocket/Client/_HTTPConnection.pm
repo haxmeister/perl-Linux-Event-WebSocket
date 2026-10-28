@@ -8,6 +8,26 @@ use parent 'Linux::Event::IO::Sock::Stream';
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use Unblock::HTTP1::Client;
+use Linux::Event::Framer ();
+use Linux::Event::WebSocket::_BQ ();
+
+# Begin with the existing HTTP-byte native consumer so Linux::Event can
+# replace it with the native bq WebSocket consumer during transition_to().
+# Linux::Event forbids adding a first provider during a live transition.
+Linux::Event::Framer->declare_native_consumer(
+    __PACKAGE__,
+    Linux::Event::WebSocket::_BQ->http_bridge_consumer_definition,
+);
+
+sub can ($class, $name) {
+    return undef if $name eq 'on_data';
+    return UNIVERSAL::can($class, $name);
+}
+
+sub _websocket_http_input ($self, $bytes) {
+    return $self->on_data($bytes);
+}
+
 use Linux::Event::WebSocket::_Handshake;
 
 # The HTTP opening exchange uses Unblock::HTTP1. On 101, this same Stream
