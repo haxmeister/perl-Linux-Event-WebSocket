@@ -14,6 +14,9 @@ Unblock::HTTP1 engine for the opening handshake.
 
 The GitHub Actions test matrix targets Perl 5.36 and Perl 5.44.0.
 
+See [0.003 release notes](docs/RELEASE-0.003.md) for the coordinated
+WebSocket/HTTP upgrade order.
+
 ## What works today
 
 - WebSocket client and server APIs.
