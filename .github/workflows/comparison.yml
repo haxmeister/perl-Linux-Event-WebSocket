@@ -2,21 +2,6 @@ name: WebSocket implementation comparison
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'WebSocket.xs'
-      - 'Makefile.PL'
-      - 'vendor/bq_websocket/**'
-      - 'lib/Linux/Event/WebSocket/**'
-      - '.github/workflows/comparison.yml'
-  push:
-    branches: [ main, bench/application-cross-implementation ]
-    paths:
-      - '.github/workflows/comparison.yml'
-      - 'bench/compare/**'
-      - 'WebSocket.xs'
-      - 'vendor/bq_websocket/**'
-      - 'lib/Linux/Event/WebSocket/**'
 
 concurrency:
   group: websocket-comparison-${{ github.ref }}
@@ -54,10 +39,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
           cpanm --notest /tmp/perl-Uniform-HTTP
-          git clone --depth 1 https://github.com/haxmeister/perl-linux-event.git /tmp/perl-linux-event
-          cpanm --notest /tmp/perl-linux-event
-          git clone --depth 1 https://github.com/haxmeister/perl-Linux-Event-HTTP.git /tmp/perl-Linux-Event-HTTP
-          cpanm --notest /tmp/perl-Linux-Event-HTTP
+          cpanm --notest 'Linux::Event@0.117' 'Uniform::HTTP@0.06' 'Unblock::HTTP1@0.13'
           cpanm --installdeps .
 
       - name: Install competitor dependencies
