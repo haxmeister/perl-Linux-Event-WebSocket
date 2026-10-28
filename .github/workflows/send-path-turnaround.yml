@@ -29,10 +29,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev
 
-      - name: Install Linux::Event stack from main
+      - name: Install published Linux::Event stack
         run: |
-          git clone --depth 1 https://github.com/haxmeister/perl-Uniform-HTTP.git /tmp/perl-Uniform-HTTP
-          cpanm --notest /tmp/perl-Uniform-HTTP
           cpanm --notest 'Linux::Event@0.117' 'Uniform::HTTP@0.06' 'Unblock::HTTP1@0.13'
           cpanm --installdeps .
           npm install --prefix bench/compare
@@ -47,7 +45,6 @@ jobs:
         run: |
           perl -MLinux::Event -e 'print "linux_event=$Linux::Event::VERSION\n"'
           perl -Iblib/lib -MLinux::Event::WebSocket -e 'print "websocket=$Linux::Event::WebSocket::VERSION\n"'
-          git -C /tmp/perl-linux-event rev-parse HEAD | sed 's/^/linux_event_commit=/'
 
       - name: Run send-path turnaround diagnostic
         run: bash bench/compare/run-send-path-turnaround.sh send-path-turnaround.csv
