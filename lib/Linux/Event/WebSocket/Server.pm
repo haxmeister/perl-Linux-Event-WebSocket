@@ -9,7 +9,7 @@ use Linux::Event::IO::Sock::Listener;
 use Linux::Event::WebSocket::Server::Connection;
 use Linux::Event::WebSocket::Server::_HTTPConnection;
 
-our $VERSION = '0.001';
+our $VERSION = '0.003';
 
 my $DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024;
 
@@ -190,6 +190,11 @@ L<Linux::Event::WebSocket::Server::Connection>.
 The socket, TLS transport, queued output, backpressure state, and already-read
 post-HTTP bytes remain on that same connection object.
 
+C<listener> returns the native Linux::Event listener. The older
+C<http_server> accessor is retained as an alias to the listener; it no longer
+returns an HTTP Server object, because opening handshakes run directly through
+Unblock::HTTP1.
+
 =head1 CALLBACKS
 
 C<on_open> receives the established WebSocket connection. C<on_message>
@@ -224,7 +229,7 @@ C<< $ws->subprotocol >>.
 
 =head1 TLS
 
-Pass the normal Linux::Event::HTTP server C<tls> policy to serve C<wss://>.
+Pass Linux::Event listener C<tls> options to serve C<wss://>.
 TLS remains attached when the HTTP connection transitions to WebSocket.
 
 =head1 CONNECTION SUBCLASSES
